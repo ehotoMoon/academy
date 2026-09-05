@@ -709,8 +709,15 @@ function openSlotSheet(pid, cid, sid){
     (sid ? '<label class="field">요일</label><div class="day-toggles" id="dayToggles"><span class="chip active" data-day-toggle="'+s.day+'">'+DAY_NAMES[s.day]+'</span></div>' : '') +
     '<div class="two-col">' +
       '<div><label class="field">시작시각</label><select id="f_start">'+timeOptions(s?s.start:"09:00")+'</select></div>' +
-      '<div><label class="field">종료시각</label><select id="f_end">'+timeOptions(s?s.end:"10:00")+'</select></div>' +
+      '<div><label class="field">종료시각</label><select id="f_end">'+timeOptions(s?s.end:"18:00")+'</select></div>' +
     '</div>' +
+    (sid ? '' : (
+    '<label class="field">등록 간격 <span class="hint">(선택한 요일마다 시작~종료 구간을 아래 간격으로 나눠 연속 등록)</span></label>' +
+    '<select id="f_interval">' +
+      '<option value="0">구간 전체를 1개 시간대로 등록</option>' +
+      '<option value="30" selected>30분 단위로 나눠 등록</option>' +
+      '<option value="60">1시간 단위로 나눠 등록</option>' +
+    '</select>')) +
     '<div class="two-col">' +
       '<div><label class="field">금액(원)</label><input id="f_price" type="number" min="0" step="1000" value="'+(s?s.price:0)+'"></div>' +
       '<div><label class="field">정원(명)</label><input id="f_cap" type="number" min="1" value="'+(s?s.cap:20)+'"></div>' +
@@ -738,15 +745,29 @@ function saveSlot(pid, cid, sid){
   }
   var days = Array.prototype.slice.call(document.querySelectorAll("[data-day-toggle].active")).map(function(el){ return +el.getAttribute("data-day-toggle"); });
   if(!days.length){ toast("요일을 1개 이상 선택해 주세요"); return; }
-  var skipped=[];
+  var intervalEl = document.getElementById("f_interval");
+  var interval = intervalEl ? +intervalEl.value : 0;
+  var ranges = [];
+  if(interval>0){
+    for(var m=toMin(start); m<toMin(end); m+=interval){
+      ranges.push({start:fromMin(m), end:fromMin(Math.min(m+interval, toMin(end)))});
+    }
+  } else {
+    ranges.push({start:start, end:end});
+  }
+  var skipped=[], createdCount=0;
   days.forEach(function(d){
-    var conflict = findInstructorConflict(d, start, end, course.instructor, null);
-    if(conflict){ skipped.push(DAY_NAMES[d]); return; }
-    DB.slots.push({id:uid("sl"), courseId:cid, day:d, start:start, end:end, price:price, cap:cap});
+    ranges.forEach(function(rg){
+      var conflict = findInstructorConflict(d, rg.start, rg.end, course.instructor, null);
+      if(conflict){ skipped.push(DAY_NAMES[d]+" "+rg.start+"~"+rg.end); return; }
+      DB.slots.push({id:uid("sl"), courseId:cid, day:d, start:rg.start, end:rg.end, price:price, cap:cap});
+      createdCount++;
+    });
   });
   persist(); closeSheet();
-  if(skipped.length) toast(skipped.join(",")+"요일은 강사 시간 중복으로 제외되고 나머지는 저장되었습니다");
-  else toast("저장했습니다");
+  var msg = createdCount+"건 등록했습니다";
+  if(skipped.length) msg += " (강사 시간 중복으로 "+skipped.length+"건 제외: "+skipped.slice(0,3).join(", ")+(skipped.length>3?" 외":"")+")";
+  toast(msg);
   render();
 }
 function deleteSlot(pid, cid, sid){
