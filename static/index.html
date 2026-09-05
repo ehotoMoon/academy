@@ -570,7 +570,7 @@ function saveProgram(pid){
   if(pid){
     var p = getProgram(pid); Object.assign(p, data);
   } else {
-    DB.programs.push(Object.assign({id:uid("pg"), surveyOpen:false, viewDays:[0,1,2,3,4,5,6], viewCourses:"all"}, data));
+    DB.programs.push(Object.assign({id:uid("pg"), surveyOpen:true, viewDays:[0,1,2,3,4,5,6], viewCourses:"all"}, data));
   }
   persist(); closeSheet(); toast("저장했습니다"); render();
   if(!pid){} // stay on list, re-render handles it
@@ -1229,7 +1229,7 @@ function renderDeploy(pid, view){
         '<b>진행중</b> — 아래 URL에 접속하면 신청서를 작성·제출할 수 있습니다.<br>' +
         '<b>마감</b> — URL에 접속해도 신청서 화면 대신 "마감되었습니다" 안내만 보이고, 더 이상 새 응답을 받지 않습니다.' +
       '</div>' +
-      '<div class="muted" style="margin-bottom:12px;">전체과정을 새로 개설하면 기본값은 항상 마감(비공개) 상태입니다. 이미 제출된 응답·캘린더·과정 데이터는 마감해도 그대로 남아있고, 관리자 화면에서는 계속 확인·수정할 수 있습니다.</div>' +
+      '<div class="muted" style="margin-bottom:12px;">전체과정을 새로 개설하면 기본값은 항상 진행중(공개) 상태입니다. 이미 제출된 응답·캘린더·과정 데이터는 마감해도 그대로 남아있고, 관리자 화면에서는 계속 확인·수정할 수 있습니다.</div>' +
       '<button class="btn '+(p.surveyOpen?'danger':'')+' block" data-act="toggleSurveyOpen" data-pid="'+pid+'">'+(p.surveyOpen?"수요조사 마감하기":"수요조사 공개하기")+'</button>' +
     '</div>' +
     '<div class="card">' +
