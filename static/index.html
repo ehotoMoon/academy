@@ -492,17 +492,17 @@ function renderProgramList(view){
 function openProgramSheet(pid){
   var p = pid ? getProgram(pid) : null;
   var body =
-    '<label class="field">전체과정명 *</label><input id="f_name" value="'+esc(p?p.name:"")+'" placeholder="예: 2026 상반기 역량강화 과정">' +
+    '<label class="field">전체과정명 *</label><input id="f_name" value="'+esc(p?p.name:"북과고 27년 심층면접 교육")+'" placeholder="예: 2026 상반기 역량강화 과정">' +
     '<label class="field">전체과정 담당자</label><input id="f_owner" value="'+esc(p?p.owner:"")+'" placeholder="담당자 이름">' +
     '<label class="field">담당자 연락처</label><input id="f_ownerTel" value="'+esc(p?p.ownerTel:"")+'" placeholder="010-0000-0000">' +
     '<div class="two-col">' +
       '<div><label class="field">시작일</label><input id="f_from" type="date" value="'+esc(p?p.from:"")+'"></div>' +
       '<div><label class="field">종료일</label><input id="f_to" type="date" value="'+esc(p?p.to:"")+'"></div>' +
     '</div>' +
-    '<label class="field">안내 문구</label><textarea id="f_desc" placeholder="수요조사 페이지에 보여질 안내문구">'+esc(p?p.desc:"")+'</textarea>' +
+    '<label class="field">안내 문구</label><textarea id="f_desc" placeholder="수요조사 페이지에 보여질 안내문구">'+esc(p?p.desc:"안녕하세요. 00학원입니다. 00과정개설을 안내하오니 받으신 URL로 신청가능합니다.")+'</textarea>' +
     '<div class="two-col">' +
       '<div><label class="field">캘린더 시작시각</label><input id="f_calStart" type="number" min="0" max="23" value="'+(p?p.calStart:9)+'"></div>' +
-      '<div><label class="field">캘린더 종료시각</label><input id="f_calEnd" type="number" min="1" max="24" value="'+(p?p.calEnd:19)+'"></div>' +
+      '<div><label class="field">캘린더 종료시각</label><input id="f_calEnd" type="number" min="1" max="24" value="'+(p?p.calEnd:22)+'"></div>' +
     '</div>';
   var footer = '<button class="btn block" data-act="saveProgram" data-pid="'+(pid||"")+'">저장</button>' +
     (pid ? '<button class="btn danger block" style="margin-top:8px" data-act="deleteProgram" data-pid="'+pid+'">전체과정 삭제</button>' : '');
@@ -519,7 +519,7 @@ function saveProgram(pid){
     to: document.getElementById("f_to").value,
     desc: document.getElementById("f_desc").value.trim(),
     calStart: clampToRange(+document.getElementById("f_calStart").value||9, 0, 23),
-    calEnd: clampToRange(+document.getElementById("f_calEnd").value||19, 1, 24)
+    calEnd: clampToRange(+document.getElementById("f_calEnd").value||22, 1, 24)
   };
   if(pid){
     var p = getProgram(pid); Object.assign(p, data);
@@ -575,7 +575,7 @@ function openCourseSheet(pid, cid){
   }).join("");
   var body =
     '<label class="field">과정명 * <span class="hint">(대상 년차는 과정명에 표기, 예: "3~5년차", "전사원")</span></label>' +
-    '<input id="f_cname" value="'+esc(c?c.name:"")+'" placeholder="예: Java 백엔드 심화 (3~5년차)">' +
+    '<input id="f_cname" value="'+esc(c?c.name:"북과고 수학 1학년")+'" placeholder="예: Java 백엔드 심화 (3~5년차)">' +
     '<label class="field">강사 *</label><input id="f_instructor" value="'+esc(c?c.instructor:"")+'" placeholder="강사 이름">' +
     '<label class="field">색상</label><div style="display:flex; gap:8px; flex-wrap:wrap;" id="colorPicker">'+colorSwatches+'</div>' +
     '<label class="field">소개</label><textarea id="f_cdesc" placeholder="과정 소개">'+esc(c?c.desc:"")+'</textarea>';
