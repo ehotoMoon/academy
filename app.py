@@ -30,7 +30,9 @@ def create_app():
 
     @app.route("/")
     def index():
-        return app.send_static_file("index.html")
+        resp = app.make_response(app.send_static_file("index.html"))
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     with app.app_context():
         db.create_all()
