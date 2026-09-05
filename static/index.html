@@ -262,7 +262,7 @@ function courseMatchesYear(courseName, years){
 }
 
 /* ===================== 데이터 레이어 (서버 API 기반) ===================== */
-function emptyDB(){ return {programs:[], courses:[], slots:[], responses:[]}; }
+function emptyDB(){ return {programs:[], courses:[], slots:[], responses:[], instructors:[]}; }
 var DB = IS_STANDALONE ? window.__STANDALONE_SNAPSHOT__ : emptyDB();
 var dbLoaded = false;
 var publicLoadedPid = null;
@@ -334,7 +334,7 @@ function onRouteChange(){
     if(publicLoadedPid === pid){ render(); return; }
     fetch("/api/public/"+pid).then(function(r){ return r.ok ? r.json() : null; })
       .then(function(data){
-        if(data){ DB = {programs:[data.program], courses:data.courses, slots:data.slots, responses:[]}; publicLoadedPid = pid; }
+        if(data){ DB = {programs:[data.program], courses:data.courses, slots:data.slots, responses:[], instructors:[]}; publicLoadedPid = pid; }
         else { DB = emptyDB(); publicLoadedPid = null; }
         render();
       }).catch(function(){ DB = emptyDB(); render(); });
@@ -405,6 +405,7 @@ function render(){
     if(!isAdmin()){ setTopbar("담당자 로그인"); return renderLogin(view); }
     setTopbar("전체과정 목록", {action:{act:"logout", label:"로그아웃"}}); return renderProgramList(view);
   }
+  if(h === "/admin/instructors") return requireAdmin(function(){ setTopbar("강사 관리", {back:true}); renderInstructorList(view); });
   var m;
   if((m = h.match(/^\/admin\/p\/([\w]+)\/cal$/))) return requireAdmin(function(){ return renderCalendar(m[1], view); });
   if((m = h.match(/^\/admin\/p\/([\w]+)\/deploy$/))) return requireAdmin(function(){ return renderDeploy(m[1], view); });
@@ -490,7 +491,8 @@ function renderProgramList(view){
       '<div style="font-size:12.5px; line-height:1.9; color:#5A4A20;">① 전체 과정 개설 (전체과정명·담당자)<br>② 과정명·강사 등록<br>③ 과정데이터 입력(요일·시간·금액) → 캘린더 배치<br>④ 수요조사 URL 배포 → 응답 집계</div>' +
     '</div>' +
     '<div class="row" style="margin-bottom:10px;"><div class="h2" style="margin:0;">전체과정</div>' +
-      '<span class="btn sm" data-act="openProgramSheet">＋ 개설</span></div>' +
+      '<div style="display:flex; gap:6px;"><span class="btn secondary sm" data-act="go" data-hash="/admin/instructors">👤 강사 관리</span>' +
+      '<span class="btn sm" data-act="openProgramSheet">＋ 개설</span></div></div>' +
     '<div class="card" style="padding:4px 12px;">' +
     (rows || '<div class="empty"><div class="big">📋</div>전체과정을 개설해 주세요</div>') +
     '</div>' +
@@ -546,6 +548,57 @@ function deleteProgram(pid){
   persist(); closeSheet(); toast("삭제했습니다"); go("/admin");
 }
 
+/* ===================== 강사 관리 ===================== */
+function renderInstructorList(view){
+  var rows = DB.instructors.map(function(i){
+    return '<div class="list-row" data-act="openInstructorSheet" data-iid="'+i.id+'">' +
+      '<div><div class="name">'+esc(i.name)+'</div>' +
+      '<div class="sub">'+esc(i.subject||"-")+(i.memo?(' · '+esc(i.memo)):'')+'</div></div>' +
+      '<div class="arrow">›</div></div>';
+  }).join("");
+  view.innerHTML =
+  '<div class="pad">' +
+    '<div class="row" style="margin-bottom:10px;"><div class="h2" style="margin:0;">강사 목록</div>' +
+      '<span class="btn sm" data-act="openInstructorSheet">＋ 추가</span></div>' +
+    '<div class="card" style="padding:4px 12px;">' +
+    (rows || '<div class="empty"><div class="big">👤</div>강사를 추가해 주세요</div>') +
+    '</div>' +
+  '</div>';
+}
+function openInstructorSheet(iid){
+  var i = iid ? DB.instructors.find(function(x){return x.id===iid;}) : null;
+  var body =
+    '<label class="field">이름 *</label><input id="f_iname" value="'+esc(i?i.name:"")+'" placeholder="강사 이름">' +
+    '<label class="field">과목</label><input id="f_isubject" value="'+esc(i?i.subject:"")+'" placeholder="예: 수학, 물리">' +
+    '<label class="field">메모</label><textarea id="f_imemo" placeholder="특이사항 메모">'+esc(i?i.memo:"")+'</textarea>' +
+    '<label class="field">기타</label><textarea id="f_ietc" placeholder="기타 정보">'+esc(i?i.etc:"")+'</textarea>';
+  var footer = '<button class="btn block" data-act="saveInstructor" data-iid="'+(iid||"")+'">저장</button>' +
+    (iid ? '<button class="btn danger block" style="margin-top:8px" data-act="deleteInstructor" data-iid="'+iid+'">강사 삭제</button>' : '');
+  openSheet(i?"강사 수정":"강사 추가", body, footer);
+}
+function saveInstructor(iid){
+  var name = document.getElementById("f_iname").value.trim();
+  if(!name){ toast("이름을 입력해 주세요"); return; }
+  var data = {
+    name:name,
+    subject: document.getElementById("f_isubject").value.trim(),
+    memo: document.getElementById("f_imemo").value.trim(),
+    etc: document.getElementById("f_ietc").value.trim()
+  };
+  if(iid){
+    var i = DB.instructors.find(function(x){return x.id===iid;});
+    Object.assign(i, data);
+  } else {
+    DB.instructors.push(Object.assign({id:uid("in")}, data));
+  }
+  persist(); closeSheet(); toast("저장했습니다"); render();
+}
+function deleteInstructor(iid){
+  if(!confirm("이 강사를 목록에서 삭제할까요? (이미 배정된 과정명의 강사 정보는 그대로 유지됩니다)")) return;
+  DB.instructors = DB.instructors.filter(function(i){return i.id!==iid;});
+  persist(); closeSheet(); toast("삭제했습니다"); render();
+}
+
 /* ===================== SC-05/06 전체과정 상세 / 과정명 ===================== */
 function renderProgramDetail(pid, view){
   var p = getProgram(pid);
@@ -583,7 +636,9 @@ function openCourseSheet(pid, cid){
   var body =
     '<label class="field">과정명 * <span class="hint">(대상 년차는 과정명에 표기, 예: "3~5년차", "전사원")</span></label>' +
     '<input id="f_cname" value="'+esc(c?c.name:"북과고 수학 1학년")+'" placeholder="예: Java 백엔드 심화 (3~5년차)">' +
-    '<label class="field">강사 *</label><input id="f_instructor" value="'+esc(c?c.instructor:"")+'" placeholder="강사 이름">' +
+    '<label class="field">강사 * <span class="hint">(등록된 강사 중 선택하거나 새 이름 입력)</span></label>' +
+    '<input id="f_instructor" list="instructorDatalist" value="'+esc(c?c.instructor:"")+'" placeholder="강사 이름">' +
+    '<datalist id="instructorDatalist">'+DB.instructors.map(function(i){return '<option value="'+esc(i.name)+'">';}).join("")+'</datalist>' +
     '<label class="field">색상</label><div style="display:flex; gap:8px; flex-wrap:wrap;" id="colorPicker">'+colorSwatches+'</div>' +
     '<label class="field">소개</label><textarea id="f_cdesc" placeholder="과정 소개">'+esc(c?c.desc:"")+'</textarea>';
   var footer = '<button class="btn block" data-act="saveCourse" data-pid="'+pid+'" data-cid="'+(cid||"")+'">저장</button>' +
@@ -1715,6 +1770,7 @@ document.addEventListener("click", function(ev){
   var cid = el.getAttribute("data-cid");
   var sid = el.getAttribute("data-sid");
   var rid = el.getAttribute("data-rid");
+  var iid = el.getAttribute("data-iid");
   var hash = el.getAttribute("data-hash");
 
   switch(act){
@@ -1727,6 +1783,9 @@ document.addEventListener("click", function(ev){
       setAdmin(false); dbLoaded=false; DB=emptyDB(); go("/");
       break;
     case "closeSheet": closeSheet(); break;
+    case "openInstructorSheet": openInstructorSheet(iid||null); break;
+    case "saveInstructor": saveInstructor(iid||null); break;
+    case "deleteInstructor": deleteInstructor(iid); break;
     case "openProgramSheet": openProgramSheet(); break;
     case "openProgramSheet2": openProgramSheet(pid); break;
     case "saveProgram": saveProgram(pid||null); break;

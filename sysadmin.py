@@ -6,7 +6,7 @@ from functools import wraps
 
 from flask import Blueprint, Response as FlaskResponse, redirect, render_template, request, session, url_for
 
-from models import Course, Program, Response, Slot, db
+from models import Course, Instructor, Program, Response, Slot, db
 
 sysadmin_bp = Blueprint("sysadmin", __name__, url_prefix="/sysadmin")
 
@@ -17,6 +17,7 @@ TABLES = {
     "courses": Course,
     "slots": Slot,
     "responses": Response,
+    "instructors": Instructor,
 }
 
 

@@ -4,7 +4,7 @@ from functools import wraps
 
 from flask import Blueprint, current_app, jsonify, request, session
 
-from models import Course, Program, Response, Slot, db, gen_id
+from models import Course, Instructor, Program, Response, Slot, db, gen_id
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -71,7 +71,10 @@ def get_db():
 def replace_db():
     data = request.get_json(force=True, silent=True) or {}
     try:
-        _replace_all(data.get("programs", []), data.get("courses", []), data.get("slots", []), data.get("responses", []))
+        _replace_all(
+            data.get("programs", []), data.get("courses", []), data.get("slots", []),
+            data.get("responses", []), data.get("instructors", []),
+        )
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 400
@@ -84,16 +87,23 @@ def _full_db_dict():
         "courses": [c.to_dict() for c in Course.query.all()],
         "slots": [s.to_dict() for s in Slot.query.all()],
         "responses": [r.to_dict() for r in Response.query.all()],
+        "instructors": [i.to_dict() for i in Instructor.query.all()],
     }
 
 
-def _replace_all(programs, courses, slots, responses):
+def _replace_all(programs, courses, slots, responses, instructors=None):
     Response.query.delete()
     Slot.query.delete()
     Course.query.delete()
     Program.query.delete()
+    Instructor.query.delete()
     db.session.flush()
 
+    for i in (instructors or []):
+        db.session.add(Instructor(
+            id=i["id"], name=i.get("name", ""), subject=i.get("subject", ""),
+            memo=i.get("memo", ""), etc=i.get("etc", ""),
+        ))
     for p in programs:
         db.session.add(Program(
             id=p["id"], name=p.get("name", ""), owner=p.get("owner", ""), owner_tel=p.get("ownerTel", ""),
@@ -153,6 +163,10 @@ def seed_demo():
     r2 = Response(id=gen_id("rs"), program_id=p.id, name="김영희", org="플랫폼운영팀", years="6~10",
                    contact="01099998888", memo="", picks=[s5.id], at=now_str(), note="", note_at="", src="web")
 
+    i1 = Instructor(id=gen_id("in"), name="박서준", subject="백엔드/데이터", memo="", etc="")
+    i2 = Instructor(id=gen_id("in"), name="이하은", subject="정보보안", memo="", etc="")
+    i3 = Instructor(id=gen_id("in"), name="최유진", subject="리더십", memo="", etc="")
+
     programs_payload = [dict(
         id=p.id, name=p.name, owner=p.owner, ownerTel=p.owner_tel, **{"from": p.date_from, "to": p.date_to},
         desc=p.desc, surveyOpen=p.survey_open, calStart=p.cal_start, calEnd=p.cal_end,
@@ -165,8 +179,10 @@ def seed_demo():
     responses_payload = [dict(id=r.id, programId=r.program_id, name=r.name, org=r.org, years=r.years,
                                contact=r.contact, memo=r.memo, picks=r.picks, at=r.at, note=r.note,
                                noteAt=r.note_at, src=r.src) for r in (r1, r2)]
+    instructors_payload = [dict(id=i.id, name=i.name, subject=i.subject, memo=i.memo, etc=i.etc)
+                            for i in (i1, i2, i3)]
 
-    _replace_all(programs_payload, courses_payload, slots_payload, responses_payload)
+    _replace_all(programs_payload, courses_payload, slots_payload, responses_payload, instructors_payload)
     return jsonify(_full_db_dict())
 
 

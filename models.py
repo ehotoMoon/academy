@@ -61,6 +61,24 @@ class Course(db.Model):
         }
 
 
+class Instructor(db.Model):
+    __tablename__ = "instructors"
+    id = db.Column(db.String(40), primary_key=True, default=lambda: gen_id("in"))
+    name = db.Column(db.String(100), nullable=False)
+    subject = db.Column(db.String(100))
+    memo = db.Column(db.Text)
+    etc = db.Column(db.Text)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "subject": self.subject or "",
+            "memo": self.memo or "",
+            "etc": self.etc or "",
+        }
+
+
 class Slot(db.Model):
     __tablename__ = "slots"
     id = db.Column(db.String(40), primary_key=True, default=lambda: gen_id("sl"))
