@@ -370,7 +370,16 @@ function setTopbar(title, opts){
   opts = opts||{};
   var bar = document.getElementById("topbar");
   var back = opts.back ? '<span class="back" data-act="back">‹</span>' : '<span style="width:14px"></span>';
-  var action = opts.action ? '<span class="action" data-act="'+opts.action.act+'">'+esc(opts.action.label)+'</span>' : '';
+  var action = '';
+  if(opts.action){
+    var extraAttrs = '';
+    if(opts.action.data){
+      Object.keys(opts.action.data).forEach(function(k){
+        extraAttrs += ' data-'+k+'="'+esc(opts.action.data[k])+'"';
+      });
+    }
+    action = '<span class="action" data-act="'+opts.action.act+'"'+extraAttrs+'>'+esc(opts.action.label)+'</span>';
+  }
   bar.innerHTML = back + '<span class="title">'+esc(title)+'</span>' + action;
 }
 
@@ -603,7 +612,7 @@ function deleteInstructor(iid){
 function renderProgramDetail(pid, view){
   var p = getProgram(pid);
   if(!p){ go("/admin"); return; }
-  setTopbar(p.name, {back:true, action:{act:"openProgramSheet2", label:"수정"}});
+  setTopbar(p.name, {back:true, action:{act:"openProgramSheet2", label:"수정", data:{pid:pid}}});
   var cs = coursesOf(pid);
   var rows = cs.map(function(c){
     var n = slotsOfCourse(c.id).length;
@@ -674,7 +683,7 @@ function deleteCourse(pid, cid){
 function renderCourseDetail(pid, cid, view){
   var c = getCourse(cid);
   if(!c){ go("/admin/p/"+pid); return; }
-  setTopbar(c.name, {back:true, action:{act:"openCourseSheet2", label:"수정"}});
+  setTopbar(c.name, {back:true, action:{act:"openCourseSheet2", label:"수정", data:{pid:pid, cid:cid}}});
   var slots = slotsOfCourse(cid).sort(function(a,b){ return a.day-b.day || toMin(a.start)-toMin(b.start); });
   var rows = slots.map(function(s){
     return '<div class="list-row" data-act="openSlotSheet" data-pid="'+pid+'" data-cid="'+cid+'" data-sid="'+s.id+'">' +
@@ -1123,7 +1132,11 @@ function renderDeploy(pid, view){
   '<div class="pad">' +
     '<div class="card">' +
       '<div class="row"><div class="h2" style="margin:0;">수요조사 상태</div><span class="badge '+(p.surveyOpen?'open':'closed')+'">'+(p.surveyOpen?'진행중':'마감')+'</span></div>' +
-      '<div class="muted" style="margin:8px 0 12px;">마감하면 URL 접속자에게 마감 안내가 표시됩니다.</div>' +
+      '<div class="muted" style="margin:8px 0 4px; line-height:1.6;">' +
+        '<b>진행중</b> — 아래 URL에 접속하면 신청서를 작성·제출할 수 있습니다.<br>' +
+        '<b>마감</b> — URL에 접속해도 신청서 화면 대신 "마감되었습니다" 안내만 보이고, 더 이상 새 응답을 받지 않습니다.' +
+      '</div>' +
+      '<div class="muted" style="margin-bottom:12px;">전체과정을 새로 개설하면 기본값은 항상 마감(비공개) 상태입니다. 이미 제출된 응답·캘린더·과정 데이터는 마감해도 그대로 남아있고, 관리자 화면에서는 계속 확인·수정할 수 있습니다.</div>' +
       '<button class="btn '+(p.surveyOpen?'danger':'')+' block" data-act="toggleSurveyOpen" data-pid="'+pid+'">'+(p.surveyOpen?"수요조사 마감하기":"수요조사 공개하기")+'</button>' +
     '</div>' +
     '<div class="card">' +
