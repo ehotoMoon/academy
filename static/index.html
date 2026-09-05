@@ -305,6 +305,19 @@ function findInstructorConflict(day, start, end, instructor, excludeSlotId){
   return null;
 }
 
+/* 강사 개인 불가능 시간 검사 */
+function findInstructorUnavailableConflict(day, start, end, instructor){
+  if(!instructor) return null;
+  var inst = DB.instructors.find(function(i){ return i.name===instructor; });
+  if(!inst || !inst.unavailable) return null;
+  for(var i=0;i<inst.unavailable.length;i++){
+    var u = inst.unavailable[i];
+    if(u.day!==day) continue;
+    if(overlap(toMin(start),toMin(end),toMin(u.start),toMin(u.end))) return u;
+  }
+  return null;
+}
+
 /* ===================== 라우터 & 공통 UI ===================== */
 var ADMIN_KEY = "eduReserve.adminAuth";
 function isAdmin(){ return sessionStorage.getItem(ADMIN_KEY)==="1"; }
@@ -321,6 +334,21 @@ var state = {
 
 function go(hash){ location.hash = hash; }
 function currentHash(){ return location.hash.replace(/^#/,"") || "/"; }
+/* 브라우저 history.back()는 실제 도착 경로에 따라 어긋날 수 있어(직접 링크 접속,
+   새로고침, 수요조사 단계이동 등) 화면 계층 구조를 기준으로 상위 화면을 직접 계산한다 */
+function goBack(){
+  var h = currentHash();
+  if(h.indexOf("/s/")===0){
+    if(state.survey.step>1){ state.survey.step -= 1; render(); return; }
+    return;
+  }
+  var m;
+  if((m = h.match(/^\/admin\/p\/([\w]+)\/(cal|deploy|resp)$/))){ go("/admin/p/"+m[1]); return; }
+  if((m = h.match(/^\/admin\/p\/([\w]+)\/c\/([\w]+)$/))){ go("/admin/p/"+m[1]); return; }
+  if((m = h.match(/^\/admin\/p\/([\w]+)$/))){ go("/admin"); return; }
+  if(h === "/admin/instructors"){ go("/admin"); return; }
+  go("/admin");
+}
 
 window.addEventListener("hashchange", onRouteChange);
 window.addEventListener("DOMContentLoaded", onRouteChange);
@@ -560,9 +588,10 @@ function deleteProgram(pid){
 /* ===================== 강사 관리 ===================== */
 function renderInstructorList(view){
   var rows = DB.instructors.map(function(i){
+    var uaCount = (i.unavailable||[]).length;
     return '<div class="list-row" data-act="openInstructorSheet" data-iid="'+i.id+'">' +
       '<div><div class="name">'+esc(i.name)+'</div>' +
-      '<div class="sub">'+esc(i.subject||"-")+(i.memo?(' · '+esc(i.memo)):'')+'</div></div>' +
+      '<div class="sub">'+esc(i.subject||"-")+(i.memo?(' · '+esc(i.memo)):'')+(uaCount?(' · 불가능시간 '+uaCount+'건'):'')+'</div></div>' +
       '<div class="arrow">›</div></div>';
   }).join("");
   view.innerHTML =
@@ -576,14 +605,54 @@ function renderInstructorList(view){
 }
 function openInstructorSheet(iid){
   var i = iid ? DB.instructors.find(function(x){return x.id===iid;}) : null;
+  window.__instructorUnavail = i ? (i.unavailable||[]).slice() : [];
+  var dayOpts = DAY_NAMES.map(function(n,idx){return '<option value="'+idx+'">'+n+'요일</option>';}).join("");
   var body =
     '<label class="field">이름 *</label><input id="f_iname" value="'+esc(i?i.name:"")+'" placeholder="강사 이름">' +
     '<label class="field">과목</label><input id="f_isubject" value="'+esc(i?i.subject:"")+'" placeholder="예: 수학, 물리">' +
     '<label class="field">메모</label><textarea id="f_imemo" placeholder="특이사항 메모">'+esc(i?i.memo:"")+'</textarea>' +
-    '<label class="field">기타</label><textarea id="f_ietc" placeholder="기타 정보">'+esc(i?i.etc:"")+'</textarea>';
+    '<label class="field">기타</label><textarea id="f_ietc" placeholder="기타 정보">'+esc(i?i.etc:"")+'</textarea>' +
+    '<label class="field">불가능 시간 <span class="hint">(이 요일·시간에는 이 강사를 배치할 수 없습니다)</span></label>' +
+    '<div id="unavailList" style="margin-bottom:8px;"></div>' +
+    '<div class="two-col">' +
+      '<div><select id="f_ua_day">'+dayOpts+'</select></div>' +
+      '<div></div>' +
+    '</div>' +
+    '<div class="two-col" style="margin-top:8px;">' +
+      '<div><select id="f_ua_start">'+timeOptions("09:00")+'</select></div>' +
+      '<div><select id="f_ua_end">'+timeOptions("10:00")+'</select></div>' +
+    '</div>' +
+    '<button type="button" class="btn secondary sm" style="margin-top:8px;" data-act="addUnavailBlock">＋ 불가능 시간 추가</button>';
   var footer = '<button class="btn block" data-act="saveInstructor" data-iid="'+(iid||"")+'">저장</button>' +
     (iid ? '<button class="btn danger block" style="margin-top:8px" data-act="deleteInstructor" data-iid="'+iid+'">강사 삭제</button>' : '');
   openSheet(i?"강사 수정":"강사 추가", body, footer);
+  renderUnavailList();
+}
+function renderUnavailList(){
+  var mount = document.getElementById("unavailList");
+  if(!mount) return;
+  var list = window.__instructorUnavail || [];
+  if(!list.length){
+    mount.innerHTML = '<div class="muted">등록된 불가능 시간이 없습니다</div>';
+    return;
+  }
+  mount.innerHTML = list.map(function(u, idx){
+    return '<div class="row" style="padding:6px 0; border-bottom:1px solid var(--line);">' +
+      '<span style="font-size:13px;">'+DAY_NAMES[u.day]+'요일 '+u.start+'~'+u.end+'</span>' +
+      '<span class="btn danger sm" data-act="removeUnavailBlock" data-idx="'+idx+'">삭제</span></div>';
+  }).join("");
+}
+function addUnavailBlock(){
+  var day = +document.getElementById("f_ua_day").value;
+  var start = document.getElementById("f_ua_start").value;
+  var end = document.getElementById("f_ua_end").value;
+  if(toMin(end)<=toMin(start)){ toast("종료시각은 시작시각보다 늦어야 합니다"); return; }
+  window.__instructorUnavail.push({day:day, start:start, end:end});
+  renderUnavailList();
+}
+function removeUnavailBlock(idx){
+  window.__instructorUnavail.splice(+idx, 1);
+  renderUnavailList();
 }
 function saveInstructor(iid){
   var name = document.getElementById("f_iname").value.trim();
@@ -592,7 +661,8 @@ function saveInstructor(iid){
     name:name,
     subject: document.getElementById("f_isubject").value.trim(),
     memo: document.getElementById("f_imemo").value.trim(),
-    etc: document.getElementById("f_ietc").value.trim()
+    etc: document.getElementById("f_ietc").value.trim(),
+    unavailable: (window.__instructorUnavail||[]).slice()
   };
   if(iid){
     var i = DB.instructors.find(function(x){return x.id===iid;});
@@ -749,6 +819,8 @@ function saveSlot(pid, cid, sid){
   if(sid){
     var conflict = findInstructorConflict(getSlot(sid).day, start, end, course.instructor, sid);
     if(conflict){ toast("강사 '"+course.instructor+"'의 "+DAY_NAMES[conflict.slot.day]+"요일 "+conflict.course.name+"("+conflict.slot.start+"~"+conflict.slot.end+")와 시간이 겹칩니다"); return; }
+    var uaConflict = findInstructorUnavailableConflict(getSlot(sid).day, start, end, course.instructor);
+    if(uaConflict){ toast("강사 '"+course.instructor+"'의 "+DAY_NAMES[getSlot(sid).day]+"요일 "+uaConflict.start+"~"+uaConflict.end+"은 불가능 시간입니다"); return; }
     var s = getSlot(sid); Object.assign(s, {start:start, end:end, price:price, cap:cap});
     persist(); closeSheet(); toast("저장했습니다"); render(); return;
   }
@@ -769,6 +841,8 @@ function saveSlot(pid, cid, sid){
     ranges.forEach(function(rg){
       var conflict = findInstructorConflict(d, rg.start, rg.end, course.instructor, null);
       if(conflict){ skipped.push(DAY_NAMES[d]+" "+rg.start+"~"+rg.end); return; }
+      var uaConflict = findInstructorUnavailableConflict(d, rg.start, rg.end, course.instructor);
+      if(uaConflict){ skipped.push(DAY_NAMES[d]+" "+rg.start+"~"+rg.end+"(불가능시간)"); return; }
       DB.slots.push({id:uid("sl"), courseId:cid, day:d, start:rg.start, end:rg.end, price:price, cap:cap});
       createdCount++;
     });
@@ -960,8 +1034,16 @@ function respCountForSlot(sid){
 /* 드래그/리사이즈 중 해당 강사가 이미 차있는 시간대를 배경으로 표시(BR-01 사전 안내) */
 function showInstructorBlockedZones(instructor, excludeSlotId, calStart, calEnd){
   if(!instructor) return;
+  var inst = DB.instructors.find(function(i){ return i.name===instructor; });
   document.querySelectorAll(".cal-daycol[data-day]").forEach(function(col){
     var day = +col.getAttribute("data-day");
+    function addOverlay(top, h, titleTxt){
+      var ov = document.createElement("div");
+      ov.className = "cal-block-blocked";
+      ov.style.top = top+"px"; ov.style.height = h+"px";
+      ov.title = titleTxt;
+      col.appendChild(ov);
+    }
     DB.slots.forEach(function(s){
       if(s.id===excludeSlotId) return;
       if(s.day!==day) return;
@@ -969,12 +1051,16 @@ function showInstructorBlockedZones(instructor, excludeSlotId, calStart, calEnd)
       if(!c || c.instructor!==instructor) return;
       var top = (toMin(s.start)-calStart)/ROW_MIN*ROW_H;
       var h = Math.max(ROW_H*0.7,(toMin(s.end)-toMin(s.start))/ROW_MIN*ROW_H);
-      var ov = document.createElement("div");
-      ov.className = "cal-block-blocked";
-      ov.style.top = top+"px"; ov.style.height = h+"px";
-      ov.title = "강사 "+instructor+" 이동 불가 · "+c.name+" "+s.start+"~"+s.end;
-      col.appendChild(ov);
+      addOverlay(top, h, "강사 "+instructor+" 이동 불가 · "+c.name+" "+s.start+"~"+s.end);
     });
+    if(inst && inst.unavailable){
+      inst.unavailable.forEach(function(u){
+        if(u.day!==day) return;
+        var top = (toMin(u.start)-calStart)/ROW_MIN*ROW_H;
+        var h = Math.max(ROW_H*0.7,(toMin(u.end)-toMin(u.start))/ROW_MIN*ROW_H);
+        addOverlay(top, h, "강사 "+instructor+" 불가능 시간 · "+u.start+"~"+u.end);
+      });
+    }
   });
 }
 function clearInstructorBlockedZones(){
@@ -1069,6 +1155,8 @@ function placeNewSlot(pid, day, startMin, cid){
   var endMin = Math.min(startMin+60, p.calEnd*60);
   var conflict = findInstructorConflict(day, fromMin(startMin), fromMin(endMin), course.instructor, null);
   if(conflict){ toast("강사 '"+course.instructor+"'의 "+DAY_NAMES[conflict.slot.day]+"요일 "+conflict.course.name+"와 시간이 겹쳐 배치할 수 없습니다"); return; }
+  var uaConflict = findInstructorUnavailableConflict(day, fromMin(startMin), fromMin(endMin), course.instructor);
+  if(uaConflict){ toast("강사 '"+course.instructor+"'의 "+DAY_NAMES[day]+"요일 "+uaConflict.start+"~"+uaConflict.end+"은 불가능 시간으로 설정되어 있어 배치할 수 없습니다"); return; }
   DB.slots.push({id:uid("sl"), courseId:cid, day:day, start:fromMin(startMin), end:fromMin(endMin), price:0, cap:20});
   persist(); toast("배치했습니다 · 세부정보를 입력해 주세요");
   mountCalendarGrid(pid);
@@ -1079,6 +1167,11 @@ function commitSlotMove(pid, sid, newDay, newStart, newEnd){
   var conflict = findInstructorConflict(newDay, newStart, newEnd, course.instructor, sid);
   if(conflict){
     toast("강사 '"+course.instructor+"'의 "+DAY_NAMES[conflict.slot.day]+"요일 "+conflict.course.name+"("+conflict.slot.start+"~"+conflict.slot.end+")와 겹쳐 원래대로 되돌렸습니다");
+    mountCalendarGrid(pid); return;
+  }
+  var uaConflict = findInstructorUnavailableConflict(newDay, newStart, newEnd, course.instructor);
+  if(uaConflict){
+    toast("강사 '"+course.instructor+"'의 "+DAY_NAMES[newDay]+"요일 "+uaConflict.start+"~"+uaConflict.end+"은 불가능 시간이라 원래대로 되돌렸습니다");
     mountCalendarGrid(pid); return;
   }
   s.day=newDay; s.start=newStart; s.end=newEnd;
@@ -1809,7 +1902,7 @@ document.addEventListener("click", function(ev){
 
   switch(act){
     case "go": go(hash); break;
-    case "back": history.back(); break;
+    case "back": goBack(); break;
     case "resetDemo": if(confirm("데모 데이터로 초기화할까요? 현재 데이터는 사라집니다.")){ seedDemo(true); render(); } break;
     case "doLogin": doLogin(); break;
     case "logout":
@@ -1820,6 +1913,8 @@ document.addEventListener("click", function(ev){
     case "openInstructorSheet": openInstructorSheet(iid||null); break;
     case "saveInstructor": saveInstructor(iid||null); break;
     case "deleteInstructor": deleteInstructor(iid); break;
+    case "addUnavailBlock": addUnavailBlock(); break;
+    case "removeUnavailBlock": removeUnavailBlock(el.getAttribute("data-idx")); break;
     case "openProgramSheet": openProgramSheet(); break;
     case "openProgramSheet2": openProgramSheet(pid); break;
     case "saveProgram": saveProgram(pid||null); break;

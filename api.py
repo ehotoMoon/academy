@@ -102,7 +102,7 @@ def _replace_all(programs, courses, slots, responses, instructors=None):
     for i in (instructors or []):
         db.session.add(Instructor(
             id=i["id"], name=i.get("name", ""), subject=i.get("subject", ""),
-            memo=i.get("memo", ""), etc=i.get("etc", ""),
+            memo=i.get("memo", ""), etc=i.get("etc", ""), unavailable=i.get("unavailable", []),
         ))
     for p in programs:
         db.session.add(Program(

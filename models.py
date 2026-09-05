@@ -68,6 +68,7 @@ class Instructor(db.Model):
     subject = db.Column(db.String(100))
     memo = db.Column(db.Text)
     etc = db.Column(db.Text)
+    unavailable = db.Column(db.JSON, default=list)
 
     def to_dict(self):
         return {
@@ -76,6 +77,7 @@ class Instructor(db.Model):
             "subject": self.subject or "",
             "memo": self.memo or "",
             "etc": self.etc or "",
+            "unavailable": self.unavailable if self.unavailable is not None else [],
         }
 
 
