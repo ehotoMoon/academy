@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>시스템어드민</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic",sans-serif;background:#F5F6F3;margin:0;padding:24px;color:#1D2430;}
+  h1{font-size:18px;display:inline-block;margin:0 0 16px;}
+  .logout{float:right;}
+  .logout button{background:#8A4FBE;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;}
+  table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+  th,td{padding:10px 14px;text-align:left;border-bottom:1px solid #E3E6E1;font-size:13px;vertical-align:middle;}
+  th{background:#16233B;color:#fff;font-weight:700;}
+  form.upload{display:inline-flex;gap:6px;align-items:center;}
+  a.btn, form.upload button{background:#0E7C7B;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;text-decoration:none;cursor:pointer;}
+  input[type=file]{font-size:12px;}
+  .hint{color:#6B7280;font-size:12px;margin-top:12px;}
+</style>
+</head>
+<body>
+<form class="logout" method="post" action="{{ url_for('sysadmin.logout') }}"><button type="submit">로그아웃</button></form>
+<h1>시스템어드민 — 테이블 CSV 관리</h1>
+<table>
+<tr><th>테이블</th><th>행 수</th><th>다운로드</th><th>업로드 (전체 교체)</th></tr>
+{% for t in tables %}
+<tr>
+  <td>{{ t }}</td>
+  <td>{{ counts[t] }}</td>
+  <td><a class="btn" href="{{ url_for('sysadmin.export_csv', table=t) }}">CSV 다운로드</a></td>
+  <td>
+    <form class="upload" method="post" action="{{ url_for('sysadmin.import_csv', table=t) }}" enctype="multipart/form-data" onsubmit="return confirm('{{ t }} 테이블 전체를 업로드한 CSV로 교체합니다. 계속할까요?');">
+      <input type="file" name="file" accept=".csv" required>
+      <button type="submit">업로드</button>
+    </form>
+  </td>
+</tr>
+{% endfor %}
+</table>
+<div class="hint">업로드는 해당 테이블을 전체 삭제 후 CSV 내용으로 다시 채웁니다. 반드시 이 페이지에서 내려받은 CSV의 헤더 형식을 유지해서 수정해 주세요.</div>
+</body>
+</html>

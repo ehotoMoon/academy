@@ -186,7 +186,6 @@ a{color:var(--teal-d);}
 <script>
 "use strict";
 /* ===================== 상수 ===================== */
-var STORE_KEY = "eduReserve.v2";
 var DAY_NAMES = ["일","월","화","수","목","금","토"];
 var YEAR_OPTS = [
   {v:"1", label:"1년차", num:1},
@@ -263,24 +262,24 @@ function courseMatchesYear(courseName, years){
   return n >= r.min && n <= r.max;
 }
 
-/* ===================== 데이터 레이어 ===================== */
+/* ===================== 데이터 레이어 (서버 API 기반) ===================== */
 function emptyDB(){ return {programs:[], courses:[], slots:[], responses:[]}; }
-function loadDB(){
-  if(IS_STANDALONE){ return window.__STANDALONE_SNAPSHOT__; }
-  try{
-    var raw = localStorage.getItem(STORE_KEY);
-    if(!raw) return emptyDB();
-    var db = JSON.parse(raw);
-    db.programs = db.programs || []; db.courses = db.courses||[]; db.slots = db.slots||[]; db.responses = db.responses||[];
-    return db;
-  }catch(e){ return emptyDB(); }
-}
-function saveDB(db){
+var DB = IS_STANDALONE ? window.__STANDALONE_SNAPSHOT__ : emptyDB();
+var dbLoaded = false;
+var publicLoadedPid = null;
+
+function persist(){
   if(IS_STANDALONE) return; // 배포본은 저장하지 않음(메모리 전용)
-  localStorage.setItem(STORE_KEY, JSON.stringify(db));
+  fetch("/api/db", {
+    method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(DB)
+  }).then(function(r){
+    if(r.status===401){
+      setAdmin(false); dbLoaded=false; DB=emptyDB();
+      toast("로그인이 만료되었습니다. 다시 로그인해 주세요");
+      go("/admin");
+    }
+  }).catch(function(){ toast("저장 실패 - 네트워크를 확인해 주세요"); });
 }
-var DB = loadDB();
-function persist(){ saveDB(DB); }
 
 function getProgram(pid){ return DB.programs.find(function(p){return p.id===pid;}); }
 function getCourse(cid){ return DB.courses.find(function(c){return c.id===cid;}); }
@@ -324,47 +323,39 @@ var state = {
 function go(hash){ location.hash = hash; }
 function currentHash(){ return location.hash.replace(/^#/,"") || "/"; }
 
-window.addEventListener("hashchange", render);
-window.addEventListener("DOMContentLoaded", function(){
-  if(!IS_STANDALONE) seedIfEmpty();
-  render();
-});
+window.addEventListener("hashchange", onRouteChange);
+window.addEventListener("DOMContentLoaded", onRouteChange);
 
-function seedIfEmpty(){
-  if(DB.programs.length) return;
-  seedDemo(false);
+function onRouteChange(){
+  if(IS_STANDALONE){ render(); return; }
+  var h = currentHash();
+  var m = h.match(/^\/s\/([\w]+)/);
+  if(m){
+    var pid = m[1];
+    if(publicLoadedPid === pid){ render(); return; }
+    fetch("/api/public/"+pid).then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(data){
+        if(data){ DB = {programs:[data.program], courses:data.courses, slots:data.slots, responses:[]}; publicLoadedPid = pid; }
+        else { DB = emptyDB(); publicLoadedPid = null; }
+        render();
+      }).catch(function(){ DB = emptyDB(); render(); });
+    return;
+  }
+  if(dbLoaded){ render(); return; }
+  fetch("/api/db").then(function(r){ return r.ok ? r.json() : emptyDB(); })
+    .then(function(data){ DB = data; dbLoaded = true; render(); })
+    .catch(function(){ DB = emptyDB(); dbLoaded = true; render(); });
 }
 
 function seedDemo(toastMsg){
-  DB = emptyDB();
-  var pid = uid("pg");
-  DB.programs.push({
-    id:pid, name:"2026 상반기 프로젝트 역량강화 과정", owner:"김민준 교육담당", ownerTel:"010-2222-3333",
-    from:"2026-10-05", to:"2026-10-30", desc:"업무 역량 향상을 위한 상반기 정기 교육과정입니다. 참여 가능한 시간대를 선택해 주세요.",
-    surveyOpen:true, calStart:9, calEnd:19, viewDays:[0,1,2,3,4,5,6], viewCourses:"all"
-  });
-  var c1 = uid("co"), c2 = uid("co"), c3 = uid("co"), c4=uid("co");
-  DB.courses.push(
-    {id:c1, programId:pid, name:"Java 백엔드 심화 (3~5년차)", instructor:"박서준", color:PALETTE[0], desc:"스프링 부트 기반 실무 백엔드 심화 과정"},
-    {id:c2, programId:pid, name:"정보보안 기본 (전사원)", instructor:"이하은", color:PALETTE[1], desc:"전사 필수 정보보안 기초 교육"},
-    {id:c3, programId:pid, name:"데이터 분석 입문 (1~2년차)", instructor:"박서준", color:PALETTE[2], desc:"엑셀·SQL 기반 데이터 분석 입문"},
-    {id:c4, programId:pid, name:"리더십 워크숍 (6년차 이상)", instructor:"최유진", color:PALETTE[3], desc:"팀 리딩을 위한 리더십 워크숍"}
-  );
-  DB.slots.push(
-    {id:uid("sl"), courseId:c1, day:1, start:"09:00", end:"11:00", price:120000, cap:15},
-    {id:uid("sl"), courseId:c1, day:3, start:"09:00", end:"11:00", price:120000, cap:15},
-    {id:uid("sl"), courseId:c2, day:6, start:"10:00", end:"12:00", price:50000, cap:30},
-    {id:uid("sl"), courseId:c3, day:2, start:"14:00", end:"16:00", price:80000, cap:20},
-    {id:uid("sl"), courseId:c4, day:4, start:"13:00", end:"14:30", price:150000, cap:12}
-  );
-  DB.responses.push(
-    {id:uid("rs"), programId:pid, name:"홍길동", org:"디지털플랫폼사업부", years:"3", contact:"01012345678",
-     memo:"오전 시간대를 선호합니다", picks:[DB.slots[0].id, DB.slots[2].id], at:now(), note:"", noteAt:"", src:"web"},
-    {id:uid("rs"), programId:pid, name:"김영희", org:"플랫폼운영팀", years:"6~10", contact:"01099998888",
-     memo:"", picks:[DB.slots[4].id], at:now(), note:"", noteAt:"", src:"web"}
-  );
-  persist();
-  if(toastMsg) toast("데모 데이터로 초기화했습니다");
+  fetch("/api/seed-demo", {method:"POST"})
+    .then(function(r){ return r.ok ? r.json() : Promise.reject(); })
+    .then(function(data){
+      DB = data; dbLoaded = true;
+      if(toastMsg) toast("데모 데이터로 초기화했습니다");
+      render();
+    })
+    .catch(function(){ toast("초기화에 실패했습니다"); });
 }
 
 var toastTimer=null;
@@ -474,8 +465,12 @@ function renderLogin(view){
 function doLogin(){
   var id = document.getElementById("loginId").value.trim();
   var pw = document.getElementById("loginPw").value.trim();
-  if(id==="admin" && pw==="test"){ setAdmin(true); go("/admin"); }
-  else toast("아이디 또는 비밀번호가 올바르지 않습니다");
+  fetch("/api/login", {
+    method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id:id, pw:pw})
+  }).then(function(r){
+    if(r.ok){ setAdmin(true); dbLoaded=false; go("/admin"); }
+    else toast("아이디 또는 비밀번호가 올바르지 않습니다");
+  }).catch(function(){ toast("로그인 요청에 실패했습니다. 네트워크를 확인해 주세요"); });
 }
 
 /* ===================== SC-03/04 전체과정 목록 ===================== */
@@ -1607,18 +1602,24 @@ function surveySubmit(pid){
   if(!sv.picks.length){ toast("시간대를 1건 이상 선택해 주세요"); return; }
   var memo = document.getElementById("sv_memo"); if(memo) sv.memo = memo.value.trim();
   var contact = "010"+sv.c2+sv.c3;
-  var respObj = {
-    id: uid("rs"), programId: pid, name: sv.name, org: sv.org, years: sv.years, contact: contact,
-    memo: sv.memo, picks: sv.picks.slice(), at: now(), note:"", noteAt:"", src: IS_STANDALONE ? "standalone" : "web"
+  var payload = {
+    name: sv.name, org: sv.org, years: sv.years, contact: contact,
+    memo: sv.memo, picks: sv.picks.slice(), src: IS_STANDALONE ? "standalone" : "web"
   };
-  if(!IS_STANDALONE){
-    var key = pid+"|"+sv.name.trim()+"|"+contact;
-    DB.responses = DB.responses.filter(function(r){ return (r.programId+"|"+r.name.trim()+"|"+digitsOnly(r.contact)) !== key; });
-    DB.responses.push(respObj);
-    persist();
+  if(IS_STANDALONE){
+    sv.submitted = Object.assign({id:uid("rs"), programId:pid, at:now(), note:"", noteAt:""}, payload);
+    sv.step = 3; render();
+    return;
   }
-  sv.submitted = respObj;
-  sv.step = 3; render();
+  fetch("/api/public/"+pid+"/responses", {
+    method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload)
+  }).then(function(r){
+    return r.json().then(function(data){ return {ok:r.ok, data:data}; });
+  }).then(function(res){
+    if(!res.ok){ toast(res.data.message || "제출에 실패했습니다"); return; }
+    sv.submitted = res.data;
+    sv.step = 3; render();
+  }).catch(function(){ toast("제출 요청에 실패했습니다. 네트워크를 확인해 주세요"); });
 }
 function renderSurveyStep3(p, view){
   setTopbar("제출 완료");
@@ -1684,7 +1685,10 @@ document.addEventListener("click", function(ev){
     case "back": history.back(); break;
     case "resetDemo": if(confirm("데모 데이터로 초기화할까요? 현재 데이터는 사라집니다.")){ seedDemo(true); render(); } break;
     case "doLogin": doLogin(); break;
-    case "logout": setAdmin(false); go("/"); break;
+    case "logout":
+      fetch("/api/logout", {method:"POST"}).catch(function(){});
+      setAdmin(false); dbLoaded=false; DB=emptyDB(); go("/");
+      break;
     case "closeSheet": closeSheet(); break;
     case "openProgramSheet": openProgramSheet(); break;
     case "openProgramSheet2": openProgramSheet(pid); break;
