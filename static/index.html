@@ -130,7 +130,12 @@ label.field:first-child{margin-top:0;}
 .cal-block.dragging{opacity:.85; z-index:50; box-shadow:0 6px 16px rgba(0,0,0,.3);}
 .cal-block.split-l{right:50%; margin-right:1px;}
 .cal-block.split-r{left:50%; margin-left:1px;}
-.cal-block.hover-expand{z-index:40; right:2px !important; left:2px !important;}
+.cal-block:hover{z-index:40; right:2px !important; left:2px !important; box-shadow:0 4px 14px rgba(0,0,0,.35);}
+.cal-block-blocked{
+  position:absolute; left:2px; right:2px; border-radius:7px; pointer-events:none; z-index:30;
+  background:repeating-linear-gradient(45deg, rgba(192,57,43,.16), rgba(192,57,43,.16) 6px, rgba(192,57,43,.30) 6px, rgba(192,57,43,.30) 12px);
+  border:1px dashed rgba(192,57,43,.6);
+}
 .palette{display:flex; flex-wrap:wrap; gap:8px;}
 .pal-chip{
   padding:8px 12px; border-radius:10px; color:#fff; font-size:12.5px; font-weight:700; cursor:pointer; touch-action:none;
@@ -462,8 +467,10 @@ function doLogin(){
   fetch("/api/login", {
     method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id:id, pw:pw})
   }).then(function(r){
-    if(r.ok){ setAdmin(true); dbLoaded=false; go("/admin"); }
-    else toast("아이디 또는 비밀번호가 올바르지 않습니다");
+    if(r.ok){
+      setAdmin(true); dbLoaded=false;
+      if(currentHash()==="/admin"){ onRouteChange(); } else { go("/admin"); }
+    } else toast("아이디 또는 비밀번호가 올바르지 않습니다");
   }).catch(function(){ toast("로그인 요청에 실패했습니다. 네트워크를 확인해 주세요"); });
 }
 
@@ -817,8 +824,8 @@ function mountCalendarGrid(pid){
   var calStart = p.calStart*60, calEnd = p.calEnd*60;
   var rows = (calEnd-calStart)/ROW_MIN;
   var mount = document.getElementById("calMount");
-  var dayColWidth = 108;
-  var timeColWidth = 52;
+  var dayColWidth = 124;
+  var timeColWidth = 56;
 
   var head = '<div style="display:flex;"><div style="width:'+timeColWidth+'px; flex-shrink:0;"></div>' +
     days.map(function(d){ return '<div class="cal-headcell" style="width:'+dayColWidth+'px; flex-shrink:0;">'+DAY_NAMES[d]+'</div>'; }).join("") + '</div>';
@@ -844,7 +851,8 @@ function mountCalendarGrid(pid){
       var h = Math.max(ROW_H*0.7,(toMin(s.end)-toMin(s.start))/ROW_MIN*ROW_H);
       var w = 100/s.cols, left = s.col*w;
       var cnt = respCountForSlot(s.id);
-      return '<div class="cal-block" data-slot-id="'+s.id+'" data-day="'+d+'" style="top:'+top+'px; height:'+h+'px; left:calc('+left+'% + 2px); width:calc('+w+'% - 4px); background:'+course.color+';">' +
+      var titleTxt = course.name+" · 강사 "+course.instructor+" · "+DAY_NAMES[d]+" "+s.start+"~"+s.end+" · "+cnt+"명";
+      return '<div class="cal-block" data-slot-id="'+s.id+'" data-day="'+d+'" title="'+esc(titleTxt)+'" style="top:'+top+'px; height:'+h+'px; left:calc('+left+'% + 2px); width:calc('+w+'% - 4px); background:'+course.color+';">' +
         '<div>'+esc(course.name)+'</div><div class="sm">'+s.start+'~'+s.end+' · '+cnt+'명</div>' +
         '<div class="resize-handle" data-resize="'+s.id+'"></div></div>';
     }).join("");
@@ -862,6 +870,30 @@ function mountCalendarGrid(pid){
 }
 function respCountForSlot(sid){
   return DB.responses.filter(function(r){ return r.picks.indexOf(sid)>=0; }).length;
+}
+
+/* 드래그/리사이즈 중 해당 강사가 이미 차있는 시간대를 배경으로 표시(BR-01 사전 안내) */
+function showInstructorBlockedZones(instructor, excludeSlotId, calStart, calEnd){
+  if(!instructor) return;
+  document.querySelectorAll(".cal-daycol[data-day]").forEach(function(col){
+    var day = +col.getAttribute("data-day");
+    DB.slots.forEach(function(s){
+      if(s.id===excludeSlotId) return;
+      if(s.day!==day) return;
+      var c = getCourse(s.courseId);
+      if(!c || c.instructor!==instructor) return;
+      var top = (toMin(s.start)-calStart)/ROW_MIN*ROW_H;
+      var h = Math.max(ROW_H*0.7,(toMin(s.end)-toMin(s.start))/ROW_MIN*ROW_H);
+      var ov = document.createElement("div");
+      ov.className = "cal-block-blocked";
+      ov.style.top = top+"px"; ov.style.height = h+"px";
+      ov.title = "강사 "+instructor+" 이동 불가 · "+c.name+" "+s.start+"~"+s.end;
+      col.appendChild(ov);
+    });
+  });
+}
+function clearInstructorBlockedZones(){
+  document.querySelectorAll(".cal-block-blocked").forEach(function(el){ el.remove(); });
 }
 
 /* ---- 캘린더 포인터 인터랙션 ---- */
@@ -889,6 +921,8 @@ function attachCalGridHandlers(pid, calStart, calEnd, dayColWidth, days){
       origTop = parseFloat(block.style.top);
       block.setPointerCapture(ev.pointerId);
       block.classList.add("dragging");
+      var course0 = getCourse(getSlot(sid).courseId);
+      showInstructorBlockedZones(course0.instructor, sid, calStart, calEnd);
     });
     block.addEventListener("pointermove", function(ev){
       if(!dragging) return;
@@ -898,6 +932,7 @@ function attachCalGridHandlers(pid, calStart, calEnd, dayColWidth, days){
     });
     block.addEventListener("pointerup", function(ev){
       dragging=false; block.classList.remove("dragging");
+      clearInstructorBlockedZones();
       if(!moved){ block.style.transform=""; openSlotSheet(pid, getCourse(getSlot(sid).courseId).id, sid); return; }
       var dx = ev.clientX-startX, dy = ev.clientY-startY;
       block.style.transform="";
@@ -922,6 +957,8 @@ function attachCalGridHandlers(pid, calStart, calEnd, dayColWidth, days){
       ev.stopPropagation(); dragging=true; startY=ev.clientY;
       origH = parseFloat(handle.parentElement.style.height);
       handle.setPointerCapture(ev.pointerId);
+      var course0 = getCourse(getSlot(sid).courseId);
+      showInstructorBlockedZones(course0.instructor, sid, calStart, calEnd);
     });
     handle.addEventListener("pointermove", function(ev){
       if(!dragging) return;
@@ -931,6 +968,7 @@ function attachCalGridHandlers(pid, calStart, calEnd, dayColWidth, days){
     });
     handle.addEventListener("pointerup", function(ev){
       dragging=false;
+      clearInstructorBlockedZones();
       var dy = ev.clientY-startY;
       var deltaMin = snap30(Math.round(dy/ROW_H*ROW_MIN));
       var s = getSlot(sid);
@@ -965,15 +1003,18 @@ function commitSlotMove(pid, sid, newDay, newStart, newEnd){
 
 function startPaletteDrag(ev, cid, pid){
   var course = getCourse(cid);
+  var p = getProgram(pid);
   var ghost = document.createElement("div");
   ghost.className = "drag-ghost"; ghost.style.background = course.color; ghost.textContent = course.name;
   document.body.appendChild(ghost);
   moveGhost(ev);
+  showInstructorBlockedZones(course.instructor, null, p.calStart*60, p.calEnd*60);
   function moveGhost(e){ ghost.style.left=(e.clientX+8)+"px"; ghost.style.top=(e.clientY+8)+"px"; }
   function onMove(e){ moveGhost(e); }
   function onUp(e){
     document.removeEventListener("pointermove", onMove);
     document.removeEventListener("pointerup", onUp);
+    clearInstructorBlockedZones();
     ghost.remove();
     var el = document.elementFromPoint(e.clientX, e.clientY);
     var cell = el ? el.closest('[data-act="calCellTap"]') : null;
@@ -1087,7 +1128,7 @@ function renderRespAll(pid){
   var mount = document.getElementById("respBody");
   var calStart = p.calStart*60, calEnd = p.calEnd*60;
   var rows = (calEnd-calStart)/ROW_MIN;
-  var dayColWidth=108, timeColWidth=52;
+  var dayColWidth=124, timeColWidth=56;
   var head = '<div style="display:flex;"><div style="width:'+timeColWidth+'px; flex-shrink:0;"></div>' +
     days.map(function(d){ return '<div class="cal-headcell" style="width:'+dayColWidth+'px; flex-shrink:0;">'+DAY_NAMES[d]+'</div>'; }).join("") + '</div>';
   var timeLabels='';
@@ -1101,7 +1142,8 @@ function renderRespAll(pid){
       var cnt = respCountForSlot(s.id);
       var hc = heatColor(cnt, s.cap);
       var course = getCourse(s.courseId);
-      return '<div class="heat-cell" style="top:'+top+'px; height:'+h+'px; left:calc('+left+'% + 2px); width:calc('+w+'% - 4px); background:'+hc.bg+'; color:'+hc.fg+'; flex-direction:column; padding:2px;">' +
+      var titleTxt = course.name+" · 강사 "+course.instructor+" · "+DAY_NAMES[d]+" "+s.start+"~"+s.end+" · "+cnt+"/"+s.cap+"명";
+      return '<div class="heat-cell" title="'+esc(titleTxt)+'" style="top:'+top+'px; height:'+h+'px; left:calc('+left+'% + 2px); width:calc('+w+'% - 4px); background:'+hc.bg+'; color:'+hc.fg+'; flex-direction:column; padding:2px;">' +
         '<div style="font-size:9px; font-weight:600; opacity:.85; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;">'+esc(course.name.split(" (")[0])+'</div>' +
         '<div>'+cnt+'/'+s.cap+(cnt>s.cap?' ★':'')+'</div></div>';
     }).join("");
@@ -1164,7 +1206,7 @@ function renderRespEach(pid){
   var days = Array.from(new Set(picks.map(function(s){return s.day;}))).sort();
   if(!days.length) days = [0,1,2,3,4,5,6].filter(function(d){return false;});
 
-  var calStart=p.calStart*60, calEnd=p.calEnd*60, rows=(calEnd-calStart)/ROW_MIN, dayColWidth=108, timeColWidth=52;
+  var calStart=p.calStart*60, calEnd=p.calEnd*60, rows=(calEnd-calStart)/ROW_MIN, dayColWidth=124, timeColWidth=56;
   var miniCal = "";
   if(days.length){
     var head='<div style="display:flex;"><div style="width:'+timeColWidth+'px; flex-shrink:0;"></div>'+days.map(function(d){return '<div class="cal-headcell" style="width:'+dayColWidth+'px; flex-shrink:0;">'+DAY_NAMES[d]+'</div>';}).join("")+'</div>';
@@ -1564,7 +1606,7 @@ function renderSurveyStep2(p, view){
 }
 function buildSurveyCalendarHTML(p, slots, days){
   var sv = state.survey;
-  var calStart=p.calStart*60, calEnd=p.calEnd*60, rows=(calEnd-calStart)/ROW_MIN, dayColWidth=108, timeColWidth=52;
+  var calStart=p.calStart*60, calEnd=p.calEnd*60, rows=(calEnd-calStart)/ROW_MIN, dayColWidth=124, timeColWidth=56;
   var head='<div style="display:flex;"><div style="width:'+timeColWidth+'px; flex-shrink:0;"></div>'+days.map(function(d){return '<div class="cal-headcell" style="width:'+dayColWidth+'px; flex-shrink:0;">'+DAY_NAMES[d]+'</div>';}).join("")+'</div>';
   var timeLabels=''; for(var m=calStart;m<calEnd;m+=ROW_MIN){ timeLabels+='<div class="cal-timelabel" style="height:'+ROW_H+'px; line-height:'+ROW_H+'px;">'+(m%60===0?fromMin(m):'')+'</div>'; }
   var dayCols = days.map(function(d){
@@ -1575,7 +1617,8 @@ function buildSurveyCalendarHTML(p, slots, days){
       var on = sv.picks.indexOf(s.id)>=0;
       var top=(toMin(s.start)-calStart)/ROW_MIN*ROW_H, h=Math.max(ROW_H*0.7,(toMin(s.end)-toMin(s.start))/ROW_MIN*ROW_H);
       var w=100/s.cols, left=s.col*w;
-      return '<div class="cal-block" data-act="surveyToggleSlot" data-sid="'+s.id+'" style="top:'+top+'px; height:'+h+'px; left:calc('+left+'% + 2px); width:calc('+w+'% - 4px); background:'+c.color+'; cursor:pointer;'+(on?' outline:3px solid #16233B; outline-offset:1px;':'')+'">' +
+      var titleTxt = c.name+" · 강사 "+c.instructor+" · "+DAY_NAMES[d]+" "+s.start+"~"+s.end+" · "+fmtMoney(s.price)+"원";
+      return '<div class="cal-block" data-act="surveyToggleSlot" data-sid="'+s.id+'" title="'+esc(titleTxt)+'" style="top:'+top+'px; height:'+h+'px; left:calc('+left+'% + 2px); width:calc('+w+'% - 4px); background:'+c.color+'; cursor:pointer;'+(on?' outline:3px solid #16233B; outline-offset:1px;':'')+'">' +
         '<div>'+(on?"✅ ":"")+esc(c.name.split(" (")[0])+'</div><div class="sm">'+s.start+'~'+s.end+'</div></div>';
     }).join("");
     return '<div class="cal-daycol" style="width:'+dayColWidth+'px; flex-shrink:0; height:'+(rows*ROW_H)+'px;">'+blocks+'</div>';
