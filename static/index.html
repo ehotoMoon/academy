@@ -345,6 +345,10 @@ function currentHash(){ return location.hash.replace(/^#/,"") || "/"; }
 /* 브라우저 history.back()는 실제 도착 경로에 따라 어긋날 수 있어(직접 링크 접속,
    새로고침, 수요조사 단계이동 등) 화면 계층 구조를 기준으로 상위 화면을 직접 계산한다 */
 function goBack(){
+  if(IS_STANDALONE){
+    if(state.survey.step>1){ state.survey.step -= 1; render(); }
+    return;
+  }
   var h = currentHash();
   if(h.indexOf("/s/")===0){
     if(state.survey.step>1){ state.survey.step -= 1; render(); return; }
@@ -824,6 +828,7 @@ function saveSlot(pid, cid, sid){
   var cap = Math.max(1, +document.getElementById("f_cap").value || 1);
   if(toMin(end) <= toMin(start)){ toast("종료시각은 시작시각보다 늦어야 합니다"); return; }
   var course = getCourse(cid);
+  if(!course){ toast("과정명을 먼저 등록해 주세요"); closeSheet(); return; }
   if(sid){
     var conflict = findInstructorConflict(getSlot(sid).day, start, end, course.instructor, sid);
     if(conflict){ toast("강사 '"+course.instructor+"'의 "+DAY_NAMES[conflict.slot.day]+"요일 "+conflict.course.name+"("+conflict.slot.start+"~"+conflict.slot.end+")와 시간이 겹칩니다"); return; }

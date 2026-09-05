@@ -70,10 +70,15 @@ def _model_columns(model):
     return [c.name for c in model.__table__.columns]
 
 
-def _row_to_csv_value(row, col):
+def _row_to_csv_value(model, row, col):
     val = getattr(row, col)
-    if isinstance(val, (list, dict)):
-        return json.dumps(val, ensure_ascii=False)
+    column = model.__table__.columns[col]
+    type_name = column.type.__class__.__name__
+    # Serialize by column type (not by the Python value's type) so a JSON column
+    # holding a plain string (e.g. Program.view_courses == "all") round-trips
+    # correctly - json.loads() on import always expects a JSON-encoded value.
+    if type_name == "JSON":
+        return "" if val is None else json.dumps(val, ensure_ascii=False)
     if isinstance(val, bool):
         return "true" if val else "false"
     return "" if val is None else val
@@ -91,7 +96,7 @@ def export_csv(table):
     writer = csv.writer(buf)
     writer.writerow(cols)
     for row in model.query.all():
-        writer.writerow([_row_to_csv_value(row, c) for c in cols])
+        writer.writerow([_row_to_csv_value(model, row, c) for c in cols])
     return FlaskResponse(
         buf.getvalue(),
         mimetype="text/csv",
