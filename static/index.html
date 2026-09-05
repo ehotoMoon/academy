@@ -136,6 +136,13 @@ label.field:first-child{margin-top:0;}
   background:repeating-linear-gradient(45deg, rgba(192,57,43,.16), rgba(192,57,43,.16) 6px, rgba(192,57,43,.30) 6px, rgba(192,57,43,.30) 12px);
   border:1px dashed rgba(192,57,43,.6);
 }
+.cal-ua-block{
+  position:absolute; left:2px; right:2px; border-radius:7px; z-index:25; cursor:pointer;
+  background:repeating-linear-gradient(45deg, rgba(107,114,128,.28), rgba(107,114,128,.28) 6px, rgba(107,114,128,.42) 6px, rgba(107,114,128,.42) 12px);
+  border:1px dashed rgba(75,85,99,.7);
+  display:flex; align-items:center; justify-content:center; color:#374151; font-size:10.5px; font-weight:700;
+}
+.cal-ua-block:hover{ background:repeating-linear-gradient(45deg, rgba(192,57,43,.30), rgba(192,57,43,.30) 6px, rgba(192,57,43,.45) 6px, rgba(192,57,43,.45) 12px); }
 .palette{display:flex; flex-wrap:wrap; gap:8px;}
 .pal-chip{
   padding:8px 12px; border-radius:10px; color:#fff; font-size:12.5px; font-weight:700; cursor:pointer; touch-action:none;
@@ -327,6 +334,7 @@ var state = {
   calDays: [0,1,2,3,4,5,6],
   calCourseFilter: "all", // 'all' or Set
   selectedPaletteCourse: null,
+  uaInstructorId: null,
   respTab: "all", // 'all' | 'each'
   respIndex: 0,
   survey: { step:1, name:"", org:"", years:"1", c1:"", c2:"", c3:"", picks:[], memo:"", filter:"my", viewMode:"cal" }
@@ -900,6 +908,10 @@ function renderCalendar(pid, view){
     '<div class="day-toggles" style="margin-bottom:14px;">'+dayToggles+'</div>' +
     '<div class="h2">② 과정 팔레트 <span class="hint">(선택 후 캘린더 빈칸을 탭하면 배치됩니다)</span></div>' +
     '<div class="palette" id="paletteBox" style="margin-bottom:14px;">'+(palette||'<span class="muted">등록된 과정명이 없습니다</span>')+'</div>' +
+    '<div class="h2">🚫 강사 불가능 시간 <span class="hint">(강사 선택 후 캘린더 빈칸을 탭하면 표시/해제됩니다. 다른 과정 배치에서도 이 시간은 자동으로 막힙니다)</span></div>' +
+    '<select id="uaSelect" style="margin-bottom:14px;"><option value="">선택 안 함</option>' +
+      DB.instructors.map(function(i){ return '<option value="'+i.id+'"'+(state.uaInstructorId===i.id?' selected':'')+'>'+esc(i.name)+'</option>'; }).join("") +
+    '</select>' +
     '<div class="h2">③ 캘린더</div>' +
   '</div>' +
   '<div class="pad" style="padding-top:0;"><div id="calMount"></div></div>' +
@@ -920,10 +932,22 @@ function renderCalendar(pid, view){
     el.addEventListener("click", function(){
       var cid = el.getAttribute("data-course-chip");
       state.selectedPaletteCourse = (state.selectedPaletteCourse===cid) ? null : cid;
+      state.uaInstructorId = null;
+      var uaSelect = document.getElementById("uaSelect"); if(uaSelect) uaSelect.value = "";
       document.querySelectorAll("[data-course-chip]").forEach(function(x){ x.classList.toggle("selected", x.getAttribute("data-course-chip")===state.selectedPaletteCourse); });
     });
     el.addEventListener("pointerdown", function(ev){ startPaletteDrag(ev, el.getAttribute("data-course-chip"), pid); });
   });
+
+  var uaSelect = document.getElementById("uaSelect");
+  if(uaSelect){
+    uaSelect.addEventListener("change", function(){
+      state.uaInstructorId = uaSelect.value || null;
+      state.selectedPaletteCourse = null;
+      document.querySelectorAll("[data-course-chip]").forEach(function(x){ x.classList.remove("selected"); });
+      mountCalendarGrid(pid);
+    });
+  }
 }
 
 function applyCalPreset(pid, preset){
@@ -995,6 +1019,7 @@ function mountCalendarGrid(pid){
   }
 
   var filterOn = state.calCourseFilter;
+  var uaInst = state.uaInstructorId ? DB.instructors.find(function(i){ return i.id===state.uaInstructorId; }) : null;
   var dayCols = days.map(function(d){
     var daySlots = DB.slots.filter(function(s){
       if(s.day!==d) return false;
@@ -1015,7 +1040,15 @@ function mountCalendarGrid(pid){
         '<div>'+esc(course.name)+'</div><div class="sm">'+s.start+'~'+s.end+' · '+cnt+'명</div>' +
         '<div class="resize-handle" data-resize="'+s.id+'"></div></div>';
     }).join("");
-    return '<div class="cal-daycol" data-day="'+d+'" style="width:'+dayColWidth+'px; flex-shrink:0; height:'+(rows*ROW_H)+'px;">'+cellsHtml+blocksHtml+'</div>';
+    var uaBlocksHtml = '';
+    if(uaInst && uaInst.unavailable){
+      uaBlocksHtml = uaInst.unavailable.filter(function(u){return u.day===d;}).map(function(u){
+        var top = (toMin(u.start)-calStart)/ROW_MIN*ROW_H;
+        var h = Math.max(ROW_H*0.7,(toMin(u.end)-toMin(u.start))/ROW_MIN*ROW_H);
+        return '<div class="cal-ua-block" data-ua-iid="'+uaInst.id+'" data-ua-day="'+u.day+'" data-ua-start="'+u.start+'" data-ua-end="'+u.end+'" title="탭하면 해제됩니다" style="top:'+top+'px; height:'+h+'px;">🚫 '+u.start+'~'+u.end+'</div>';
+      }).join("");
+    }
+    return '<div class="cal-daycol" data-day="'+d+'" style="width:'+dayColWidth+'px; flex-shrink:0; height:'+(rows*ROW_H)+'px;">'+cellsHtml+blocksHtml+uaBlocksHtml+'</div>';
   }).join("");
 
   mount.innerHTML =
@@ -1071,13 +1104,24 @@ function clearInstructorBlockedZones(){
 function attachCalGridHandlers(pid, calStart, calEnd, dayColWidth, days){
   var p = getProgram(pid);
 
-  // 1) 빈칸 탭 배치
+  // 1) 빈칸 탭 배치 (과정 배치 또는 강사 불가능시간 표시)
   document.querySelectorAll('[data-act="calCellTap"]').forEach(function(cell){
     cell.addEventListener("click", function(){
-      if(!state.selectedPaletteCourse){ toast("먼저 팔레트에서 과정을 선택해 주세요"); return; }
       var day = +cell.getAttribute("data-day");
       var startMin = +cell.getAttribute("data-min");
+      if(state.uaInstructorId){ toggleUnavailableCell(state.uaInstructorId, day, startMin); mountCalendarGrid(pid); return; }
+      if(!state.selectedPaletteCourse){ toast("먼저 팔레트에서 과정을 선택하거나, 강사 불가능 시간을 선택해 주세요"); return; }
       placeNewSlot(pid, day, startMin, state.selectedPaletteCourse);
+    });
+  });
+
+  // 1b) 불가능 시간 블록 탭 → 해제
+  document.querySelectorAll(".cal-ua-block").forEach(function(block){
+    block.addEventListener("click", function(ev){
+      ev.stopPropagation();
+      toggleUnavailableCell(block.getAttribute("data-ua-iid"), +block.getAttribute("data-ua-day"),
+        toMin(block.getAttribute("data-ua-start")), toMin(block.getAttribute("data-ua-end")));
+      mountCalendarGrid(pid);
     });
   });
 
@@ -1149,6 +1193,16 @@ function attachCalGridHandlers(pid, calStart, calEnd, dayColWidth, days){
   });
 }
 
+/* 캘린더에서 직접 탭해 강사 불가능 시간을 표시/해제 (30분 단위) */
+function toggleUnavailableCell(iid, day, startMin, endMin){
+  var inst = DB.instructors.find(function(i){ return i.id===iid; });
+  if(!inst) return;
+  if(!inst.unavailable) inst.unavailable = [];
+  var start = fromMin(startMin), end = fromMin(endMin!=null ? endMin : startMin+30);
+  var idx = inst.unavailable.findIndex(function(u){ return u.day===day && u.start===start && u.end===end; });
+  if(idx>=0){ inst.unavailable.splice(idx,1); persist(); toast("불가능 시간을 해제했습니다"); }
+  else { inst.unavailable.push({day:day, start:start, end:end}); persist(); toast("불가능 시간으로 표시했습니다"); }
+}
 function placeNewSlot(pid, day, startMin, cid){
   var course = getCourse(cid);
   var p = getProgram(pid);
