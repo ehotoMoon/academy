@@ -23,6 +23,7 @@ class Program(db.Model):
     cal_end = db.Column(db.Integer, default=19)
     view_days = db.Column(db.JSON, default=lambda: [0, 1, 2, 3, 4, 5, 6])
     view_courses = db.Column(db.JSON, default=lambda: "all")
+    schedule_type = db.Column(db.String(20), default="recurring")
 
     def to_dict(self):
         return {
@@ -38,6 +39,7 @@ class Program(db.Model):
             "calEnd": self.cal_end if self.cal_end is not None else 19,
             "viewDays": self.view_days if self.view_days is not None else [0, 1, 2, 3, 4, 5, 6],
             "viewCourses": self.view_courses if self.view_courses is not None else "all",
+            "scheduleType": self.schedule_type or "recurring",
         }
 
 
@@ -90,6 +92,7 @@ class Slot(db.Model):
     end = db.Column(db.String(5), nullable=False)
     price = db.Column(db.Integer, default=0)
     cap = db.Column(db.Integer, default=20)
+    date = db.Column(db.String(10))
 
     def to_dict(self):
         return {
@@ -100,6 +103,7 @@ class Slot(db.Model):
             "end": self.end,
             "price": self.price or 0,
             "cap": self.cap or 20,
+            "date": self.date or None,
         }
 
 

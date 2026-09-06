@@ -235,6 +235,13 @@ function fmtDate(d){
   if(!d) return "";
   return d;
 }
+/* spot(특강) 과정: 슬롯이 실제 날짜를 가짐 / 주단위 순환: 요일만 가짐 */
+function dateToDay(dateStr){ return new Date(dateStr+"T00:00:00").getDay(); }
+function slotGroupKey(s){ return s.date || s.day; }
+function slotDayLabel(s){
+  if(!s.date) return DAY_NAMES[s.day]+"요일";
+  return s.date.slice(5).replace("-","/")+"("+DAY_NAMES[s.day]+")";
+}
 function now(){
   var d = new Date();
   function p(n){return (n<10?"0":"")+n;}
@@ -305,12 +312,18 @@ function slotsOfProgram(pid){
 function responsesOf(pid){ return DB.responses.filter(function(r){return r.programId===pid;}); }
 
 /* 강사 중복 검사 BR-01 : 전체과정 달라도 강사 같으면 충돌 */
-function findInstructorConflict(day, start, end, instructor, excludeSlotId){
+/* date가 둘 다 있으면 같은 날짜일 때만, 아니면(recurring) 요일 기준으로 비교
+   (spot 과정끼리 서로 다른 주의 같은 요일은 오탐 충돌 처리하지 않기 위함) */
+function sameSchedule(day, date, s){
+  if(date && s.date) return s.date===date;
+  return s.day===day;
+}
+function findInstructorConflict(day, start, end, instructor, excludeSlotId, date){
   if(!instructor) return null;
   for(var i=0;i<DB.slots.length;i++){
     var s = DB.slots[i];
     if(s.id===excludeSlotId) continue;
-    if(s.day!==day) continue;
+    if(!sameSchedule(day, date, s)) continue;
     var c = getCourse(s.courseId);
     if(!c || c.instructor!==instructor) continue;
     if(overlap(toMin(start),toMin(end),toMin(s.start),toMin(s.end))) return {slot:s, course:c};
@@ -319,13 +332,13 @@ function findInstructorConflict(day, start, end, instructor, excludeSlotId){
 }
 
 /* 강사 개인 불가능 시간 검사 */
-function findInstructorUnavailableConflict(day, start, end, instructor){
+function findInstructorUnavailableConflict(day, start, end, instructor, date){
   if(!instructor) return null;
   var inst = DB.instructors.find(function(i){ return i.name===instructor; });
   if(!inst || !inst.unavailable) return null;
   for(var i=0;i<inst.unavailable.length;i++){
     var u = inst.unavailable[i];
-    if(u.day!==day) continue;
+    if(!sameSchedule(day, date, u)) continue;
     if(overlap(toMin(start),toMin(end),toMin(u.start),toMin(u.end))) return u;
   }
   return null;
@@ -557,6 +570,11 @@ function openProgramSheet(pid){
   var p = pid ? getProgram(pid) : null;
   var body =
     '<label class="field">전체과정명 *</label><input id="f_name" value="'+esc(p?p.name:"북과고 27년 심층면접 교육")+'" placeholder="예: 2026 상반기 역량강화 과정">' +
+    '<label class="field">일정 유형 * <span class="hint">(전체과정 하나당 유형은 고정)</span></label>' +
+    '<select id="f_scheduleType">' +
+      '<option value="recurring"'+((!p||p.scheduleType==="recurring")?' selected':'')+'>주단위 순환 (매주 같은 요일 반복)</option>' +
+      '<option value="spot"'+((p&&p.scheduleType==="spot")?' selected':'')+'>spot 특강 (실제 날짜, 보통 1일~1주일)</option>' +
+    '</select>' +
     '<label class="field">전체과정 담당자</label><input id="f_owner" value="'+esc(p?p.owner:"")+'" placeholder="담당자 이름">' +
     '<label class="field">담당자 연락처</label><input id="f_ownerTel" value="'+esc(p?p.ownerTel:"")+'" placeholder="010-0000-0000">' +
     '<div class="two-col">' +
@@ -577,6 +595,7 @@ function saveProgram(pid){
   if(!name){ toast("전체과정명을 입력해 주세요"); return; }
   var data = {
     name:name,
+    scheduleType: document.getElementById("f_scheduleType").value,
     owner: document.getElementById("f_owner").value.trim(),
     ownerTel: document.getElementById("f_ownerTel").value.trim(),
     from: document.getElementById("f_from").value,
@@ -775,7 +794,7 @@ function renderCourseDetail(pid, cid, view){
   var slots = slotsOfCourse(cid).sort(function(a,b){ return a.day-b.day || toMin(a.start)-toMin(b.start); });
   var rows = slots.map(function(s){
     return '<div class="list-row" data-act="openSlotSheet" data-pid="'+pid+'" data-cid="'+cid+'" data-sid="'+s.id+'">' +
-      '<div><span class="name">'+DAY_NAMES[s.day]+'요일 '+s.start+'~'+s.end+'</span>' +
+      '<div><span class="name">'+slotDayLabel(s)+' '+s.start+'~'+s.end+'</span>' +
       '<div class="sub">'+fmtMoney(s.price)+'원 · 정원 '+s.cap+'명</div></div><div class="arrow">›</div></div>';
   }).join("");
   view.innerHTML =
@@ -797,13 +816,29 @@ function timeOptions(sel){
 }
 function openSlotSheet(pid, cid, sid){
   var s = sid ? getSlot(sid) : null;
-  var days = [0,1,2,3,4,5,6].map(function(d){
-    var on = s ? s.day===d : false;
-    return '<span class="chip'+(on&&s?' active':'')+'" data-day-toggle="'+d+'">'+DAY_NAMES[d]+'</span>';
-  }).join("");
+  var p = getProgram(pid);
+  var isSpot = p && p.scheduleType==="spot";
+  var pickerHtml;
+  if(isSpot){
+    if(!state.calDates) state.calDates = [];
+    var dateChips = state.calDates.slice().sort().map(function(dt){
+      var on = s ? s.date===dt : false;
+      return '<span class="chip'+(on&&s?' active':'')+'" data-day-toggle="'+dt+'">'+dt.slice(5).replace("-","/")+'('+DAY_NAMES[dateToDay(dt)]+')</span>';
+    }).join("");
+    pickerHtml =
+      (sid ? '' : '<label class="field">날짜 * <span class="hint">(캘린더 화면에서 추가한 날짜 중 선택, 여러 개 동시 등록 가능)</span></label><div class="day-toggles" id="dayToggles">'+(dateChips||'<span class="muted">캘린더 화면에서 날짜를 먼저 추가해 주세요</span>')+'</div>') +
+      (sid ? '<label class="field">날짜</label><div class="day-toggles" id="dayToggles"><span class="chip active" data-day-toggle="'+s.date+'">'+slotDayLabel(s)+'</span></div>' : '');
+  } else {
+    var days = [0,1,2,3,4,5,6].map(function(d){
+      var on = s ? s.day===d : false;
+      return '<span class="chip'+(on&&s?' active':'')+'" data-day-toggle="'+d+'">'+DAY_NAMES[d]+'</span>';
+    }).join("");
+    pickerHtml =
+      (sid ? '' : '<label class="field">요일 * <span class="hint">(여러 요일 동시 등록 가능)</span></label><div class="day-toggles" id="dayToggles">'+days+'</div>') +
+      (sid ? '<label class="field">요일</label><div class="day-toggles" id="dayToggles"><span class="chip active" data-day-toggle="'+s.day+'">'+slotDayLabel(s)+'</span></div>' : '');
+  }
   var body =
-    (sid ? '' : '<label class="field">요일 * <span class="hint">(여러 요일 동시 등록 가능)</span></label><div class="day-toggles" id="dayToggles">'+days+'</div>') +
-    (sid ? '<label class="field">요일</label><div class="day-toggles" id="dayToggles"><span class="chip active" data-day-toggle="'+s.day+'">'+DAY_NAMES[s.day]+'</span></div>' : '') +
+    pickerHtml +
     '<div class="two-col">' +
       '<div><label class="field">시작시각</label><select id="f_start">'+timeOptions(s?s.start:"09:00")+'</select></div>' +
       '<div><label class="field">종료시각</label><select id="f_end">'+timeOptions(s?s.end:"18:00")+'</select></div>' +
@@ -836,15 +871,18 @@ function saveSlot(pid, cid, sid){
   var course = getCourse(cid);
   if(!course){ toast("과정명을 먼저 등록해 주세요"); closeSheet(); return; }
   if(sid){
-    var conflict = findInstructorConflict(getSlot(sid).day, start, end, course.instructor, sid);
-    if(conflict){ toast("강사 '"+course.instructor+"'의 "+DAY_NAMES[conflict.slot.day]+"요일 "+conflict.course.name+"("+conflict.slot.start+"~"+conflict.slot.end+")와 시간이 겹칩니다"); return; }
-    var uaConflict = findInstructorUnavailableConflict(getSlot(sid).day, start, end, course.instructor);
-    if(uaConflict){ toast("강사 '"+course.instructor+"'의 "+DAY_NAMES[getSlot(sid).day]+"요일 "+uaConflict.start+"~"+uaConflict.end+"은 불가능 시간입니다"); return; }
+    var editingSlot = getSlot(sid);
+    var conflict = findInstructorConflict(editingSlot.day, start, end, course.instructor, sid, editingSlot.date);
+    if(conflict){ toast("강사 '"+course.instructor+"'의 "+slotDayLabel(conflict.slot)+" "+conflict.course.name+"("+conflict.slot.start+"~"+conflict.slot.end+")와 시간이 겹칩니다"); return; }
+    var uaConflict = findInstructorUnavailableConflict(editingSlot.day, start, end, course.instructor, editingSlot.date);
+    if(uaConflict){ toast("강사 '"+course.instructor+"'의 "+slotDayLabel(editingSlot)+" "+uaConflict.start+"~"+uaConflict.end+"은 불가능 시간입니다"); return; }
     var s = getSlot(sid); Object.assign(s, {start:start, end:end, price:price, cap:cap});
     persist(); closeSheet(); toast("저장했습니다"); render(); return;
   }
-  var days = Array.prototype.slice.call(document.querySelectorAll("[data-day-toggle].active")).map(function(el){ return +el.getAttribute("data-day-toggle"); });
-  if(!days.length){ toast("요일을 1개 이상 선택해 주세요"); return; }
+  var program = getProgram(pid);
+  var isSpot = program && program.scheduleType==="spot";
+  var picks = Array.prototype.slice.call(document.querySelectorAll("[data-day-toggle].active")).map(function(el){ return el.getAttribute("data-day-toggle"); });
+  if(!picks.length){ toast(isSpot ? "날짜를 1개 이상 선택해 주세요" : "요일을 1개 이상 선택해 주세요"); return; }
   var intervalEl = document.getElementById("f_interval");
   var interval = intervalEl ? +intervalEl.value : 0;
   var ranges = [];
@@ -856,13 +894,15 @@ function saveSlot(pid, cid, sid){
     ranges.push({start:start, end:end});
   }
   var skipped=[], createdCount=0;
-  days.forEach(function(d){
+  picks.forEach(function(pk){
+    var d = isSpot ? dateToDay(pk) : +pk;
+    var dt = isSpot ? pk : null;
     ranges.forEach(function(rg){
-      var conflict = findInstructorConflict(d, rg.start, rg.end, course.instructor, null);
-      if(conflict){ skipped.push(DAY_NAMES[d]+" "+rg.start+"~"+rg.end); return; }
-      var uaConflict = findInstructorUnavailableConflict(d, rg.start, rg.end, course.instructor);
-      if(uaConflict){ skipped.push(DAY_NAMES[d]+" "+rg.start+"~"+rg.end+"(불가능시간)"); return; }
-      DB.slots.push({id:uid("sl"), courseId:cid, day:d, start:rg.start, end:rg.end, price:price, cap:cap});
+      var conflict = findInstructorConflict(d, rg.start, rg.end, course.instructor, null, dt);
+      if(conflict){ skipped.push(slotDayLabel({day:d,date:dt})+" "+rg.start+"~"+rg.end); return; }
+      var uaConflict = findInstructorUnavailableConflict(d, rg.start, rg.end, course.instructor, dt);
+      if(uaConflict){ skipped.push(slotDayLabel({day:d,date:dt})+" "+rg.start+"~"+rg.end+"(불가능시간)"); return; }
+      DB.slots.push({id:uid("sl"), courseId:cid, day:d, date:dt, start:rg.start, end:rg.end, price:price, cap:cap});
       createdCount++;
     });
   });
@@ -885,16 +925,44 @@ function renderCalendar(pid, view){
   if(!p){ go("/admin"); return; }
   setTopbar("캘린더 배치", {back:true});
   var cs = coursesOf(pid);
+  var isSpot = p.scheduleType==="spot";
   if(!state.calDays || !state.calDays.length) state.calDays = [0,1,2,3,4,5,6];
+  if(!state.calDates) state.calDates = [];
   if(state.calCourseFilter === undefined) state.calCourseFilter = "all";
 
-  var presetBtns = [
-    {k:"week", label:"1주일"}, {k:"weekday", label:"평일"}, {k:"weekend", label:"주말"}, {k:"used", label:"등록된 요일만"}
-  ].map(function(pr){ return '<span class="chip" data-act="calPreset" data-preset="'+pr.k+'" data-pid="'+pid+'">'+pr.label+'</span>'; }).join("");
-  var dayToggles = [0,1,2,3,4,5,6].map(function(d){
-    var on = state.calDays.indexOf(d)>=0;
-    return '<span class="chip'+(on?' active':'')+'" data-act="calDayToggle" data-day="'+d+'" data-pid="'+pid+'">'+DAY_NAMES[d]+'</span>';
-  }).join("");
+  var section1Html;
+  if(isSpot){
+    var dateChipsCal = state.calDates.slice().sort().map(function(dt){
+      return '<span class="chip active" data-act="calDateRemove" data-date="'+dt+'" data-pid="'+pid+'">'+dt.slice(5).replace("-","/")+'('+DAY_NAMES[dateToDay(dt)]+') ✕</span>';
+    }).join("");
+    var rangeFillBtn = '';
+    if(p.from && p.to){
+      var spanDays = Math.round((new Date(p.to+"T00:00:00").getTime()-new Date(p.from+"T00:00:00").getTime())/86400000)+1;
+      if(spanDays>0 && spanDays<=14){
+        rangeFillBtn = '<span class="chip" data-act="calDateFillRange" data-pid="'+pid+'">전체과정 기간 전부 추가('+esc(p.from)+'~'+esc(p.to)+')</span>';
+      }
+    }
+    section1Html =
+      '<div class="h2">① 날짜 선택 <span class="hint">(spot 특강 - 실제 달력 날짜를 추가하세요)</span></div>' +
+      '<div class="two-col" style="margin-bottom:8px;">' +
+        '<div><input type="date" id="calDateInput" value="'+esc(p.from||"")+'"></div>' +
+        '<div><span class="btn secondary block" data-act="calDateAdd" data-pid="'+pid+'">＋ 날짜 추가</span></div>' +
+      '</div>' +
+      (rangeFillBtn ? '<div class="day-toggles" style="margin-bottom:8px;">'+rangeFillBtn+'</div>' : '') +
+      '<div class="day-toggles" style="margin-bottom:14px;">'+(dateChipsCal||'<span class="muted">날짜를 추가해 주세요</span>')+'</div>';
+  } else {
+    var presetBtns = [
+      {k:"week", label:"1주일"}, {k:"weekday", label:"평일"}, {k:"weekend", label:"주말"}, {k:"used", label:"등록된 요일만"}
+    ].map(function(pr){ return '<span class="chip" data-act="calPreset" data-preset="'+pr.k+'" data-pid="'+pid+'">'+pr.label+'</span>'; }).join("");
+    var dayToggles = [0,1,2,3,4,5,6].map(function(d){
+      var on = state.calDays.indexOf(d)>=0;
+      return '<span class="chip'+(on?' active':'')+'" data-act="calDayToggle" data-day="'+d+'" data-pid="'+pid+'">'+DAY_NAMES[d]+'</span>';
+    }).join("");
+    section1Html =
+      '<div class="h2">① 요일 보기</div>' +
+      '<div class="day-toggles" style="margin-bottom:8px;">'+presetBtns+'</div>' +
+      '<div class="day-toggles" style="margin-bottom:14px;">'+dayToggles+'</div>';
+  }
 
   var palette = cs.map(function(c){
     return '<span class="pal-chip" data-course-chip="'+c.id+'" style="background:'+c.color+'">'+esc(c.name)+' · '+esc(c.instructor)+'</span>';
@@ -914,9 +982,7 @@ function renderCalendar(pid, view){
 
   view.innerHTML =
   '<div class="pad" style="padding-bottom:6px;">' +
-    '<div class="h2">① 요일 보기</div>' +
-    '<div class="day-toggles" style="margin-bottom:8px;">'+presetBtns+'</div>' +
-    '<div class="day-toggles" style="margin-bottom:14px;">'+dayToggles+'</div>' +
+    section1Html +
     '<div class="h2">② 과정 팔레트 <span class="hint">(선택 후 캘린더 빈칸을 탭하면 배치됩니다)</span></div>' +
     '<div class="palette" id="paletteBox" style="margin-bottom:14px;">'+(palette||'<span class="muted">등록된 과정명이 없습니다</span>')+'</div>' +
     '<div class="h2">🚫 강사 불가능 시간 <span class="hint">(강사 선택 후 캘린더 빈칸을 탭하면 표시/해제됩니다. 다른 과정 배치에서도 이 시간은 자동으로 막힙니다)</span></div>' +
@@ -979,6 +1045,31 @@ function toggleCalDay(pid, day){
   state.calDays.sort();
   render();
 }
+function calDateAdd(pid){
+  var input = document.getElementById("calDateInput");
+  var v = input ? input.value : "";
+  if(!v){ toast("날짜를 선택해 주세요"); return; }
+  if(!state.calDates) state.calDates = [];
+  if(state.calDates.indexOf(v)<0) state.calDates.push(v);
+  render();
+}
+function calDateRemove(pid, dt){
+  state.calDates = (state.calDates||[]).filter(function(x){ return x!==dt; });
+  render();
+}
+function calDateFillRange(pid){
+  var p = getProgram(pid);
+  if(!p || !p.from || !p.to) return;
+  if(!state.calDates) state.calDates = [];
+  var d = new Date(p.from+"T00:00:00");
+  var end = new Date(p.to+"T00:00:00");
+  while(d.getTime()<=end.getTime()){
+    var iso = d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+    if(state.calDates.indexOf(iso)<0) state.calDates.push(iso);
+    d.setDate(d.getDate()+1);
+  }
+  render();
+}
 function calFilterAll(pid){ state.calCourseFilter="all"; render(); }
 function calFilterToggle(pid, cid){
   if(state.calCourseFilter==="all") state.calCourseFilter=[];
@@ -1012,9 +1103,17 @@ function layoutDay(slots){
   return result;
 }
 
+function calendarColumns(p){
+  if(p.scheduleType==="spot"){
+    return (state.calDates||[]).slice().sort().map(function(dt){
+      return {key:dt, day:dateToDay(dt), date:dt, label:dt.slice(5).replace("-","/")+"("+DAY_NAMES[dateToDay(dt)]+")"};
+    });
+  }
+  return state.calDays.slice().sort().map(function(d){ return {key:d, day:d, date:null, label:DAY_NAMES[d]}; });
+}
 function mountCalendarGrid(pid){
   var p = getProgram(pid);
-  var days = state.calDays.slice().sort();
+  var cols = calendarColumns(p);
   var calStart = p.calStart*60, calEnd = p.calEnd*60;
   var rows = (calEnd-calStart)/ROW_MIN;
   var mount = document.getElementById("calMount");
@@ -1022,7 +1121,7 @@ function mountCalendarGrid(pid){
   var timeColWidth = 56;
 
   var head = '<div style="display:flex;"><div style="width:'+timeColWidth+'px; flex-shrink:0;"></div>' +
-    days.map(function(d){ return '<div class="cal-headcell" style="width:'+dayColWidth+'px; flex-shrink:0;">'+DAY_NAMES[d]+'</div>'; }).join("") + '</div>';
+    cols.map(function(col){ return '<div class="cal-headcell" style="width:'+dayColWidth+'px; flex-shrink:0;">'+col.label+'</div>'; }).join("") + '</div>';
 
   var timeLabels = '';
   for(var m=calStart, i=0; m<calEnd; m+=ROW_MIN, i++){
@@ -1031,39 +1130,39 @@ function mountCalendarGrid(pid){
 
   var filterOn = state.calCourseFilter;
   var uaInst = state.uaInstructorId ? DB.instructors.find(function(i){ return i.id===state.uaInstructorId; }) : null;
-  var dayCols = days.map(function(d){
+  var dayCols = cols.map(function(col){
     var daySlots = DB.slots.filter(function(s){
-      if(s.day!==d) return false;
+      if(slotGroupKey(s)!==col.key) return false;
       if(filterOn!=="all" && filterOn.indexOf(s.courseId)<0) return false;
       var c = getCourse(s.courseId); return c && c.programId===pid;
     });
     var laidOut = layoutDay(daySlots);
     var cellsHtml = '';
-    for(var mm=calStart; mm<calEnd; mm+=ROW_MIN){ cellsHtml += '<div class="cal-cell" data-act="calCellTap" data-day="'+d+'" data-min="'+mm+'" style="height:'+ROW_H+'px;"></div>'; }
+    for(var mm=calStart; mm<calEnd; mm+=ROW_MIN){ cellsHtml += '<div class="cal-cell" data-act="calCellTap" data-day="'+col.day+'" data-date="'+(col.date||"")+'" data-min="'+mm+'" style="height:'+ROW_H+'px;"></div>'; }
     var blocksHtml = laidOut.map(function(s){
       var course = getCourse(s.courseId);
       var top = (toMin(s.start)-calStart)/ROW_MIN*ROW_H;
       var h = Math.max(ROW_H*0.7,(toMin(s.end)-toMin(s.start))/ROW_MIN*ROW_H);
       var w = 100/s.cols, left = s.col*w;
       var cnt = respCountForSlot(s.id);
-      var titleTxt = course.name+" · 강사 "+course.instructor+" · "+DAY_NAMES[d]+" "+s.start+"~"+s.end+" · "+cnt+"명";
-      return '<div class="cal-block" data-slot-id="'+s.id+'" data-day="'+d+'" title="'+esc(titleTxt)+'" style="top:'+top+'px; height:'+h+'px; left:calc('+left+'% + 2px); width:calc('+w+'% - 4px); background:'+course.color+';">' +
+      var titleTxt = course.name+" · 강사 "+course.instructor+" · "+slotDayLabel(s)+" "+s.start+"~"+s.end+" · "+cnt+"명";
+      return '<div class="cal-block" data-slot-id="'+s.id+'" data-day="'+col.day+'" title="'+esc(titleTxt)+'" style="top:'+top+'px; height:'+h+'px; left:calc('+left+'% + 2px); width:calc('+w+'% - 4px); background:'+course.color+';">' +
         '<div>'+esc(course.name)+'</div><div class="sm">'+s.start+'~'+s.end+' · '+cnt+'명</div>' +
         '<div class="resize-handle" data-resize="'+s.id+'"></div></div>';
     }).join("");
     var uaBlocksHtml = '';
     if(uaInst && uaInst.unavailable){
-      uaBlocksHtml = uaInst.unavailable.filter(function(u){return u.day===d;}).map(function(u){
+      uaBlocksHtml = uaInst.unavailable.filter(function(u){return sameSchedule(col.day, col.date, u);}).map(function(u){
         var top = (toMin(u.start)-calStart)/ROW_MIN*ROW_H;
         var h = Math.max(ROW_H*0.7,(toMin(u.end)-toMin(u.start))/ROW_MIN*ROW_H);
-        return '<div class="cal-ua-block" data-ua-iid="'+uaInst.id+'" data-ua-day="'+u.day+'" data-ua-start="'+u.start+'" data-ua-end="'+u.end+'" title="탭하면 해제됩니다" style="top:'+top+'px; height:'+h+'px;">🚫 '+u.start+'~'+u.end+'</div>';
+        return '<div class="cal-ua-block" data-ua-iid="'+uaInst.id+'" data-ua-day="'+u.day+'" data-ua-date="'+(u.date||"")+'" data-ua-start="'+u.start+'" data-ua-end="'+u.end+'" title="탭하면 해제됩니다" style="top:'+top+'px; height:'+h+'px;">🚫 '+u.start+'~'+u.end+'</div>';
       }).join("");
     }
     // 다른 전체과정에서 이미 이 강사가 수업 중인 시간(이 캘린더엔 원래 안 보이는 슬롯)도 불가능 시간과 함께 표시
     var otherBusyHtml = '';
     if(uaInst){
       otherBusyHtml = DB.slots.filter(function(s){
-        if(s.day!==d) return false;
+        if(!sameSchedule(col.day, col.date, s)) return false;
         var c = getCourse(s.courseId);
         return c && c.instructor===uaInst.name && c.programId!==pid;
       }).map(function(s){
@@ -1074,7 +1173,7 @@ function mountCalendarGrid(pid){
         return '<div class="cal-ua-busy" title="'+esc(titleTxt)+'" style="top:'+top+'px; height:'+h+'px;">🚫 '+s.start+'~'+s.end+' (타과정)</div>';
       }).join("");
     }
-    return '<div class="cal-daycol" data-day="'+d+'" style="width:'+dayColWidth+'px; flex-shrink:0; height:'+(rows*ROW_H)+'px;">'+cellsHtml+blocksHtml+uaBlocksHtml+otherBusyHtml+'</div>';
+    return '<div class="cal-daycol" data-day="'+col.day+'" data-date="'+(col.date||"")+'" style="width:'+dayColWidth+'px; flex-shrink:0; height:'+(rows*ROW_H)+'px;">'+cellsHtml+blocksHtml+uaBlocksHtml+otherBusyHtml+'</div>';
   }).join("");
 
   mount.innerHTML =
@@ -1084,7 +1183,7 @@ function mountCalendarGrid(pid){
       '<div style="display:flex; position:relative;">'+dayCols+'</div>' +
     '</div></div></div>';
 
-  attachCalGridHandlers(pid, calStart, calEnd, dayColWidth, days);
+  attachCalGridHandlers(pid, calStart, calEnd, dayColWidth);
 }
 function respCountForSlot(sid){
   return DB.responses.filter(function(r){ return r.picks.indexOf(sid)>=0; }).length;
@@ -1096,6 +1195,7 @@ function showInstructorBlockedZones(instructor, excludeSlotId, calStart, calEnd)
   var inst = DB.instructors.find(function(i){ return i.name===instructor; });
   document.querySelectorAll(".cal-daycol[data-day]").forEach(function(col){
     var day = +col.getAttribute("data-day");
+    var colDate = col.getAttribute("data-date") || null;
     function addOverlay(top, h, titleTxt){
       var ov = document.createElement("div");
       ov.className = "cal-block-blocked";
@@ -1105,7 +1205,7 @@ function showInstructorBlockedZones(instructor, excludeSlotId, calStart, calEnd)
     }
     DB.slots.forEach(function(s){
       if(s.id===excludeSlotId) return;
-      if(s.day!==day) return;
+      if(!sameSchedule(day, colDate, s)) return;
       var c = getCourse(s.courseId);
       if(!c || c.instructor!==instructor) return;
       var top = (toMin(s.start)-calStart)/ROW_MIN*ROW_H;
@@ -1114,7 +1214,7 @@ function showInstructorBlockedZones(instructor, excludeSlotId, calStart, calEnd)
     });
     if(inst && inst.unavailable){
       inst.unavailable.forEach(function(u){
-        if(u.day!==day) return;
+        if(!sameSchedule(day, colDate, u)) return;
         var top = (toMin(u.start)-calStart)/ROW_MIN*ROW_H;
         var h = Math.max(ROW_H*0.7,(toMin(u.end)-toMin(u.start))/ROW_MIN*ROW_H);
         addOverlay(top, h, "강사 "+instructor+" 불가능 시간 · "+u.start+"~"+u.end);
@@ -1127,17 +1227,18 @@ function clearInstructorBlockedZones(){
 }
 
 /* ---- 캘린더 포인터 인터랙션 ---- */
-function attachCalGridHandlers(pid, calStart, calEnd, dayColWidth, days){
+function attachCalGridHandlers(pid, calStart, calEnd, dayColWidth){
   var p = getProgram(pid);
 
   // 1) 빈칸 탭 배치 (과정 배치 또는 강사 불가능시간 표시)
   document.querySelectorAll('[data-act="calCellTap"]').forEach(function(cell){
     cell.addEventListener("click", function(){
       var day = +cell.getAttribute("data-day");
+      var date = cell.getAttribute("data-date") || null;
       var startMin = +cell.getAttribute("data-min");
-      if(state.uaInstructorId){ toggleUnavailableCell(state.uaInstructorId, day, startMin); mountCalendarGrid(pid); return; }
+      if(state.uaInstructorId){ toggleUnavailableCell(state.uaInstructorId, day, startMin, null, date); mountCalendarGrid(pid); return; }
       if(!state.selectedPaletteCourse){ toast("먼저 팔레트에서 과정을 선택하거나, 강사 불가능 시간을 선택해 주세요"); return; }
-      placeNewSlot(pid, day, startMin, state.selectedPaletteCourse);
+      placeNewSlot(pid, day, startMin, state.selectedPaletteCourse, date);
     });
   });
 
@@ -1146,7 +1247,8 @@ function attachCalGridHandlers(pid, calStart, calEnd, dayColWidth, days){
     block.addEventListener("click", function(ev){
       ev.stopPropagation();
       toggleUnavailableCell(block.getAttribute("data-ua-iid"), +block.getAttribute("data-ua-day"),
-        toMin(block.getAttribute("data-ua-start")), toMin(block.getAttribute("data-ua-end")));
+        toMin(block.getAttribute("data-ua-start")), toMin(block.getAttribute("data-ua-end")),
+        block.getAttribute("data-ua-date")||null);
       mountCalendarGrid(pid);
     });
   });
@@ -1182,11 +1284,12 @@ function attachCalGridHandlers(pid, calStart, calEnd, dayColWidth, days){
       var col = el ? el.closest(".cal-daycol") : null;
       var s = getSlot(sid);
       var newDay = col ? +col.getAttribute("data-day") : s.day;
+      var newDate = col ? (col.getAttribute("data-date")||null) : (s.date||null);
       var deltaMin = snap30(Math.round(dy/ROW_H*ROW_MIN));
       var dur = toMin(s.end)-toMin(s.start);
       var newStart = clampToRange(toMin(s.start)+deltaMin, calStart, calEnd-dur);
       var newEnd = newStart+dur;
-      commitSlotMove(pid, sid, newDay, fromMin(newStart), fromMin(newEnd));
+      commitSlotMove(pid, sid, newDay, fromMin(newStart), fromMin(newEnd), newDate);
     });
   });
 
@@ -1214,47 +1317,48 @@ function attachCalGridHandlers(pid, calStart, calEnd, dayColWidth, days){
       var deltaMin = snap30(Math.round(dy/ROW_H*ROW_MIN));
       var s = getSlot(sid);
       var newEndMin = clampToRange(toMin(s.end)+deltaMin, toMin(s.start)+ROW_MIN, calEnd);
-      commitSlotMove(pid, sid, s.day, s.start, fromMin(newEndMin));
+      commitSlotMove(pid, sid, s.day, s.start, fromMin(newEndMin), s.date||null);
     });
   });
 }
 
-/* 캘린더에서 직접 탭해 강사 불가능 시간을 표시/해제 (30분 단위) */
-function toggleUnavailableCell(iid, day, startMin, endMin){
+/* 캘린더에서 직접 탭해 강사 불가능 시간을 표시/해제 (30분 단위)
+   spot 캘린더(date 있음)에서 표시하면 그 날짜에만 적용되고, 주단위 캘린더에서 표시하면 매주 반복 적용됨 */
+function toggleUnavailableCell(iid, day, startMin, endMin, date){
   var inst = DB.instructors.find(function(i){ return i.id===iid; });
   if(!inst) return;
   if(!inst.unavailable) inst.unavailable = [];
   var start = fromMin(startMin), end = fromMin(endMin!=null ? endMin : startMin+30);
-  var idx = inst.unavailable.findIndex(function(u){ return u.day===day && u.start===start && u.end===end; });
+  var idx = inst.unavailable.findIndex(function(u){ return u.day===day && u.start===start && u.end===end && (u.date||null)===(date||null); });
   if(idx>=0){ inst.unavailable.splice(idx,1); persist(); toast("불가능 시간을 해제했습니다"); }
-  else { inst.unavailable.push({day:day, start:start, end:end}); persist(); toast("불가능 시간으로 표시했습니다"); }
+  else { inst.unavailable.push({day:day, date:date||null, start:start, end:end}); persist(); toast("불가능 시간으로 표시했습니다"); }
 }
-function placeNewSlot(pid, day, startMin, cid){
+function placeNewSlot(pid, day, startMin, cid, date){
   var course = getCourse(cid);
   var p = getProgram(pid);
   var endMin = Math.min(startMin+60, p.calEnd*60);
-  var conflict = findInstructorConflict(day, fromMin(startMin), fromMin(endMin), course.instructor, null);
-  if(conflict){ toast("강사 '"+course.instructor+"'의 "+DAY_NAMES[conflict.slot.day]+"요일 "+conflict.course.name+"와 시간이 겹쳐 배치할 수 없습니다"); return; }
-  var uaConflict = findInstructorUnavailableConflict(day, fromMin(startMin), fromMin(endMin), course.instructor);
-  if(uaConflict){ toast("강사 '"+course.instructor+"'의 "+DAY_NAMES[day]+"요일 "+uaConflict.start+"~"+uaConflict.end+"은 불가능 시간으로 설정되어 있어 배치할 수 없습니다"); return; }
-  DB.slots.push({id:uid("sl"), courseId:cid, day:day, start:fromMin(startMin), end:fromMin(endMin), price:0, cap:20});
+  var conflict = findInstructorConflict(day, fromMin(startMin), fromMin(endMin), course.instructor, null, date);
+  if(conflict){ toast("강사 '"+course.instructor+"'의 "+slotDayLabel(conflict.slot)+" "+conflict.course.name+"와 시간이 겹쳐 배치할 수 없습니다"); return; }
+  var uaConflict = findInstructorUnavailableConflict(day, fromMin(startMin), fromMin(endMin), course.instructor, date);
+  if(uaConflict){ toast("강사 '"+course.instructor+"'의 "+slotDayLabel({day:day,date:date})+" "+uaConflict.start+"~"+uaConflict.end+"은 불가능 시간으로 설정되어 있어 배치할 수 없습니다"); return; }
+  DB.slots.push({id:uid("sl"), courseId:cid, day:day, date:date||null, start:fromMin(startMin), end:fromMin(endMin), price:0, cap:20});
   persist(); toast("배치했습니다 · 세부정보를 입력해 주세요");
   mountCalendarGrid(pid);
 }
-function commitSlotMove(pid, sid, newDay, newStart, newEnd){
+function commitSlotMove(pid, sid, newDay, newStart, newEnd, newDate){
   var s = getSlot(sid);
   var course = getCourse(s.courseId);
-  var conflict = findInstructorConflict(newDay, newStart, newEnd, course.instructor, sid);
+  var conflict = findInstructorConflict(newDay, newStart, newEnd, course.instructor, sid, newDate);
   if(conflict){
-    toast("강사 '"+course.instructor+"'의 "+DAY_NAMES[conflict.slot.day]+"요일 "+conflict.course.name+"("+conflict.slot.start+"~"+conflict.slot.end+")와 겹쳐 원래대로 되돌렸습니다");
+    toast("강사 '"+course.instructor+"'의 "+slotDayLabel(conflict.slot)+" "+conflict.course.name+"("+conflict.slot.start+"~"+conflict.slot.end+")와 겹쳐 원래대로 되돌렸습니다");
     mountCalendarGrid(pid); return;
   }
-  var uaConflict = findInstructorUnavailableConflict(newDay, newStart, newEnd, course.instructor);
+  var uaConflict = findInstructorUnavailableConflict(newDay, newStart, newEnd, course.instructor, newDate);
   if(uaConflict){
-    toast("강사 '"+course.instructor+"'의 "+DAY_NAMES[newDay]+"요일 "+uaConflict.start+"~"+uaConflict.end+"은 불가능 시간이라 원래대로 되돌렸습니다");
+    toast("강사 '"+course.instructor+"'의 "+slotDayLabel({day:newDay,date:newDate})+" "+uaConflict.start+"~"+uaConflict.end+"은 불가능 시간이라 원래대로 되돌렸습니다");
     mountCalendarGrid(pid); return;
   }
-  s.day=newDay; s.start=newStart; s.end=newEnd;
+  s.day=newDay; s.date=newDate||null; s.start=newStart; s.end=newEnd;
   persist(); toast("저장했습니다");
   mountCalendarGrid(pid);
 }
@@ -1277,7 +1381,7 @@ function startPaletteDrag(ev, cid, pid){
     var el = document.elementFromPoint(e.clientX, e.clientY);
     var cell = el ? el.closest('[data-act="calCellTap"]') : null;
     if(cell){
-      placeNewSlot(pid, +cell.getAttribute("data-day"), +cell.getAttribute("data-min"), cid);
+      placeNewSlot(pid, +cell.getAttribute("data-day"), +cell.getAttribute("data-min"), cid, cell.getAttribute("data-date")||null);
     }
   }
   document.addEventListener("pointermove", onMove);
@@ -1384,19 +1488,24 @@ function renderRespAll(pid){
   var slots = slotsOfProgram(pid);
   var over = slots.filter(function(s){ return respCountForSlot(s.id) > s.cap; }).length;
   var none = slots.filter(function(s){ return respCountForSlot(s.id) === 0; }).length;
-  var days = Array.from(new Set(slots.map(function(s){return s.day;}))).sort();
-  if(!days.length) days=[0,1,2,3,4,5,6];
+  var isSpot = p.scheduleType==="spot";
+  var groupKeys = Array.from(new Set(slots.map(slotGroupKey)));
+  if(isSpot){ groupKeys.sort(); } else { groupKeys.sort(function(a,b){return a-b;}); if(!groupKeys.length) groupKeys=[0,1,2,3,4,5,6]; }
+  var cols = groupKeys.map(function(k){
+    return isSpot ? {key:k, day:dateToDay(k), date:k, label:k.slice(5).replace("-","/")+"("+DAY_NAMES[dateToDay(k)]+")"}
+                  : {key:k, day:k, date:null, label:DAY_NAMES[k]};
+  });
 
   var mount = document.getElementById("respBody");
   var calStart = p.calStart*60, calEnd = p.calEnd*60;
   var rows = (calEnd-calStart)/ROW_MIN;
   var dayColWidth=124, timeColWidth=56;
   var head = '<div style="display:flex;"><div style="width:'+timeColWidth+'px; flex-shrink:0;"></div>' +
-    days.map(function(d){ return '<div class="cal-headcell" style="width:'+dayColWidth+'px; flex-shrink:0;">'+DAY_NAMES[d]+'</div>'; }).join("") + '</div>';
+    cols.map(function(col){ return '<div class="cal-headcell" style="width:'+dayColWidth+'px; flex-shrink:0;">'+col.label+'</div>'; }).join("") + '</div>';
   var timeLabels='';
   for(var m=calStart;m<calEnd;m+=ROW_MIN){ timeLabels += '<div class="cal-timelabel" style="height:'+ROW_H+'px; line-height:'+ROW_H+'px;">'+(m%60===0?fromMin(m):'')+'</div>'; }
-  var dayCols = days.map(function(d){
-    var daySlots = slots.filter(function(s){return s.day===d;});
+  var dayCols = cols.map(function(col){
+    var daySlots = slots.filter(function(s){return slotGroupKey(s)===col.key;});
     var laid = layoutDay(daySlots);
     var blocks = laid.map(function(s){
       var top=(toMin(s.start)-calStart)/ROW_MIN*ROW_H, h=Math.max(ROW_H*0.7,(toMin(s.end)-toMin(s.start))/ROW_MIN*ROW_H);
@@ -1404,7 +1513,7 @@ function renderRespAll(pid){
       var cnt = respCountForSlot(s.id);
       var hc = heatColor(cnt, s.cap);
       var course = getCourse(s.courseId);
-      var titleTxt = course.name+" · 강사 "+course.instructor+" · "+DAY_NAMES[d]+" "+s.start+"~"+s.end+" · "+cnt+"/"+s.cap+"명";
+      var titleTxt = course.name+" · 강사 "+course.instructor+" · "+slotDayLabel(s)+" "+s.start+"~"+s.end+" · "+cnt+"/"+s.cap+"명";
       return '<div class="heat-cell" title="'+esc(titleTxt)+'" style="top:'+top+'px; height:'+h+'px; left:calc('+left+'% + 2px); width:calc('+w+'% - 4px); background:'+hc.bg+'; color:'+hc.fg+'; flex-direction:column; padding:2px;">' +
         '<div style="font-size:9px; font-weight:600; opacity:.85; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;">'+esc(course.name.split(" (")[0])+'</div>' +
         '<div>'+cnt+'/'+s.cap+(cnt>s.cap?' ★':'')+'</div></div>';
@@ -1415,7 +1524,7 @@ function renderRespAll(pid){
   var ranking = slots.slice().map(function(s){ return {s:s, cnt:respCountForSlot(s.id)}; }).sort(function(a,b){return b.cnt-a.cnt;}).slice(0,8);
   var rankHtml = ranking.map(function(r,i){
     var c = getCourse(r.s.courseId);
-    return '<div class="rank-row"><div class="rank-num">'+(i+1)+'</div><div style="flex:1;"><div style="font-weight:700; font-size:13px;">'+esc(c.name)+'</div><div class="muted">'+DAY_NAMES[r.s.day]+' '+r.s.start+'~'+r.s.end+'</div></div><div class="pill-count">'+r.cnt+'명</div></div>';
+    return '<div class="rank-row"><div class="rank-num">'+(i+1)+'</div><div style="flex:1;"><div style="font-weight:700; font-size:13px;">'+esc(c.name)+'</div><div class="muted">'+slotDayLabel(r.s)+' '+r.s.start+'~'+r.s.end+'</div></div><div class="pill-count">'+r.cnt+'명</div></div>';
   }).join("") || '<div class="empty">응답이 없습니다</div>';
 
   var courseSummary = coursesOf(pid).map(function(c){
@@ -1465,16 +1574,21 @@ function renderRespEach(pid){
   var picks = r.picks.map(getSlot).filter(Boolean);
   var totalMoney = picks.reduce(function(a,s){return a+s.price;},0);
   var totalMin = picks.reduce(function(a,s){return a+(toMin(s.end)-toMin(s.start));},0);
-  var days = Array.from(new Set(picks.map(function(s){return s.day;}))).sort();
-  if(!days.length) days = [0,1,2,3,4,5,6].filter(function(d){return false;});
+  var isSpotResp = p.scheduleType==="spot";
+  var groupKeys2 = Array.from(new Set(picks.map(slotGroupKey)));
+  groupKeys2.sort(isSpotResp ? undefined : function(a,b){return a-b;});
+  var cols2 = groupKeys2.map(function(k){
+    return isSpotResp ? {key:k, day:dateToDay(k), date:k, label:k.slice(5).replace("-","/")+"("+DAY_NAMES[dateToDay(k)]+")"}
+                       : {key:k, day:k, date:null, label:DAY_NAMES[k]};
+  });
 
   var calStart=p.calStart*60, calEnd=p.calEnd*60, rows=(calEnd-calStart)/ROW_MIN, dayColWidth=124, timeColWidth=56;
   var miniCal = "";
-  if(days.length){
-    var head='<div style="display:flex;"><div style="width:'+timeColWidth+'px; flex-shrink:0;"></div>'+days.map(function(d){return '<div class="cal-headcell" style="width:'+dayColWidth+'px; flex-shrink:0;">'+DAY_NAMES[d]+'</div>';}).join("")+'</div>';
+  if(cols2.length){
+    var head='<div style="display:flex;"><div style="width:'+timeColWidth+'px; flex-shrink:0;"></div>'+cols2.map(function(col){return '<div class="cal-headcell" style="width:'+dayColWidth+'px; flex-shrink:0;">'+col.label+'</div>';}).join("")+'</div>';
     var timeLabels=''; for(var m=calStart;m<calEnd;m+=ROW_MIN){ timeLabels+='<div class="cal-timelabel" style="height:'+ROW_H+'px; line-height:'+ROW_H+'px;">'+(m%60===0?fromMin(m):'')+'</div>'; }
-    var dayCols = days.map(function(d){
-      var daySlots = picks.filter(function(s){return s.day===d;});
+    var dayCols = cols2.map(function(col){
+      var daySlots = picks.filter(function(s){return slotGroupKey(s)===col.key;});
       var laid = layoutDay(daySlots);
       var blocks = laid.map(function(s){
         var c = getCourse(s.courseId);
@@ -1491,7 +1605,7 @@ function renderRespEach(pid){
 
   var pickList = picks.map(function(s){
     var c = getCourse(s.courseId);
-    return '<div class="list-row" style="cursor:default;"><div><div class="name">'+esc(c.name)+'</div><div class="sub">'+DAY_NAMES[s.day]+' '+s.start+'~'+s.end+' · '+fmtMoney(s.price)+'원</div></div></div>';
+    return '<div class="list-row" style="cursor:default;"><div><div class="name">'+esc(c.name)+'</div><div class="sub">'+slotDayLabel(s)+' '+s.start+'~'+s.end+' · '+fmtMoney(s.price)+'원</div></div></div>';
   }).join("") || '<div class="empty">선택 내역 없음</div>';
 
   mount.innerHTML =
@@ -1562,7 +1676,7 @@ function buildIndividualSummaryTXT(pid, rid){
   lines.push("--- 선택 내역 ("+picks.length+"건) ---");
   picks.forEach(function(s,i){
     var c = getCourse(s.courseId);
-    lines.push((i+1)+") "+c.name+" | "+DAY_NAMES[s.day]+" | "+s.start+"~"+s.end+" | "+fmtMoney(s.price)+"원 | "+s.id);
+    lines.push((i+1)+") "+c.name+" | "+slotDayLabel(s)+" | "+s.start+"~"+s.end+" | "+fmtMoney(s.price)+"원 | "+s.id);
   });
   var total = picks.reduce(function(a,s){return a+s.price;},0);
   lines.push("[합계] "+picks.length+"건 / "+fmtMoney(total)+"원");
@@ -1585,7 +1699,7 @@ function buildFullSummaryTXT(pid){
     var c = getCourse(s.courseId);
     var cnt = respCountForSlot(s.id);
     var mark = cnt>s.cap ? " ★정원초과" : (cnt===0 ? " △신청없음" : "");
-    lines.push(DAY_NAMES[s.day]+" "+s.start+"~"+s.end+" | "+c.name+" | "+cnt+"/"+s.cap+"명"+mark);
+    lines.push(slotDayLabel(s)+" "+s.start+"~"+s.end+" | "+c.name+" | "+cnt+"/"+s.cap+"명"+mark);
   });
   lines.push("");
   lines.push("--- 과정별 요약 ---");
@@ -1734,7 +1848,7 @@ function exportCSV(pid){
       var c = getCourse(s.courseId);
       var yearRange = courseYearRange(c.name);
       var yearLabel = yearRange.all ? "전사원" : (yearRange.min+"~"+yearRange.max+"년차");
-      rows.push([r.at, r.name, r.org, r.years, fmtContact(r.contact), c.name, c.instructor, yearLabel, DAY_NAMES[s.day], s.start, s.end, s.price, r.memo||"", r.note||""]);
+      rows.push([r.at, r.name, r.org, r.years, fmtContact(r.contact), c.name, c.instructor, yearLabel, slotDayLabel(s), s.start, s.end, s.price, r.memo||"", r.note||""]);
     });
   });
   var csv = rows.map(function(row){
@@ -1827,8 +1941,14 @@ function renderSurveyStep2(p, view){
     if(sv.filter==="picked") return sv.picks.indexOf(s.id)>=0;
     return true;
   });
-  var days = Array.from(new Set(filtered.map(function(s){return s.day;}))).sort();
-  if(!days.length) days=[0,1,2,3,4,5,6];
+  var isSpotSurvey = p.scheduleType==="spot";
+  var groupKeys3 = Array.from(new Set(filtered.map(slotGroupKey)));
+  groupKeys3.sort(isSpotSurvey ? undefined : function(a,b){return a-b;});
+  if(!isSpotSurvey && !groupKeys3.length) groupKeys3=[0,1,2,3,4,5,6];
+  var cols3 = groupKeys3.map(function(k){
+    return isSpotSurvey ? {key:k, day:dateToDay(k), date:k, label:k.slice(5).replace("-","/")+"("+DAY_NAMES[dateToDay(k)]+")"}
+                         : {key:k, day:k, date:null, label:DAY_NAMES[k]};
+  });
 
   var filterChips = [
     {k:"my", label:"내 년차"}, {k:"all", label:"전체"}, {k:"picked", label:"선택한 것만 ("+sv.picks.length+")"}
@@ -1838,13 +1958,17 @@ function renderSurveyStep2(p, view){
 
   var body;
   if(sv.viewMode==="cal"){
-    body = buildSurveyCalendarHTML(p, filtered, days);
+    body = buildSurveyCalendarHTML(p, filtered, cols3);
   } else {
-    var rows = filtered.slice().sort(function(a,b){return a.day-b.day||toMin(a.start)-toMin(b.start);}).map(function(s){
+    var rows = filtered.slice().sort(function(a,b){
+      var ka=slotGroupKey(a), kb=slotGroupKey(b);
+      if(ka<kb) return -1; if(ka>kb) return 1;
+      return toMin(a.start)-toMin(b.start);
+    }).map(function(s){
       var c = getCourse(s.courseId);
       var on = sv.picks.indexOf(s.id)>=0;
       return '<div class="list-row" data-act="surveyToggleSlot" data-sid="'+s.id+'" style="background:'+(on?'#EAF6F3':'transparent')+'; border-radius:8px; padding-left:8px;">' +
-        '<div><div class="name">'+(on?"✅ ":"")+esc(c.name)+'</div><div class="sub">'+DAY_NAMES[s.day]+' '+s.start+'~'+s.end+' · '+fmtMoney(s.price)+'원 · 정원 '+s.cap+'명</div></div></div>';
+        '<div><div class="name">'+(on?"✅ ":"")+esc(c.name)+'</div><div class="sub">'+slotDayLabel(s)+' '+s.start+'~'+s.end+' · '+fmtMoney(s.price)+'원 · 정원 '+s.cap+'명</div></div></div>';
     }).join("") || '<div class="empty">해당 조건의 과정이 없습니다</div>';
     body = '<div class="card" style="padding:4px 12px;">'+rows+'</div>';
   }
@@ -1866,20 +1990,20 @@ function renderSurveyStep2(p, view){
     '<button class="btn block" '+(sv.picks.length? "" : "disabled")+' data-act="surveySubmit" data-pid="'+p.id+'">제출하기</button>' +
   '</div>';
 }
-function buildSurveyCalendarHTML(p, slots, days){
+function buildSurveyCalendarHTML(p, slots, cols){
   var sv = state.survey;
   var calStart=p.calStart*60, calEnd=p.calEnd*60, rows=(calEnd-calStart)/ROW_MIN, dayColWidth=124, timeColWidth=56;
-  var head='<div style="display:flex;"><div style="width:'+timeColWidth+'px; flex-shrink:0;"></div>'+days.map(function(d){return '<div class="cal-headcell" style="width:'+dayColWidth+'px; flex-shrink:0;">'+DAY_NAMES[d]+'</div>';}).join("")+'</div>';
+  var head='<div style="display:flex;"><div style="width:'+timeColWidth+'px; flex-shrink:0;"></div>'+cols.map(function(col){return '<div class="cal-headcell" style="width:'+dayColWidth+'px; flex-shrink:0;">'+col.label+'</div>';}).join("")+'</div>';
   var timeLabels=''; for(var m=calStart;m<calEnd;m+=ROW_MIN){ timeLabels+='<div class="cal-timelabel" style="height:'+ROW_H+'px; line-height:'+ROW_H+'px;">'+(m%60===0?fromMin(m):'')+'</div>'; }
-  var dayCols = days.map(function(d){
-    var daySlots = slots.filter(function(s){return s.day===d;});
+  var dayCols = cols.map(function(col){
+    var daySlots = slots.filter(function(s){return slotGroupKey(s)===col.key;});
     var laid = layoutDay(daySlots);
     var blocks = laid.map(function(s){
       var c = getCourse(s.courseId);
       var on = sv.picks.indexOf(s.id)>=0;
       var top=(toMin(s.start)-calStart)/ROW_MIN*ROW_H, h=Math.max(ROW_H*0.7,(toMin(s.end)-toMin(s.start))/ROW_MIN*ROW_H);
       var w=100/s.cols, left=s.col*w;
-      var titleTxt = c.name+" · 강사 "+c.instructor+" · "+DAY_NAMES[d]+" "+s.start+"~"+s.end+" · "+fmtMoney(s.price)+"원";
+      var titleTxt = c.name+" · 강사 "+c.instructor+" · "+slotDayLabel(s)+" "+s.start+"~"+s.end+" · "+fmtMoney(s.price)+"원";
       return '<div class="cal-block" data-act="surveyToggleSlot" data-sid="'+s.id+'" title="'+esc(titleTxt)+'" style="top:'+top+'px; height:'+h+'px; left:calc('+left+'% + 2px); width:calc('+w+'% - 4px); background:'+c.color+'; cursor:pointer;'+(on?' outline:3px solid #16233B; outline-offset:1px;':'')+'">' +
         '<div>'+(on?"✅ ":"")+esc(c.name.split(" (")[0])+'</div><div class="sm">'+s.start+'~'+s.end+'</div></div>';
     }).join("");
@@ -1928,7 +2052,7 @@ function renderSurveyStep3(p, view){
   var totalMoney = picks.reduce(function(a,s){return a+s.price;},0);
   var pickHtml = picks.map(function(s){
     var c = getCourse(s.courseId);
-    return '<div class="list-row" style="cursor:default;"><div><div class="name">'+esc(c.name)+'</div><div class="sub">'+DAY_NAMES[s.day]+' '+s.start+'~'+s.end+' · '+fmtMoney(s.price)+'원</div></div></div>';
+    return '<div class="list-row" style="cursor:default;"><div><div class="name">'+esc(c.name)+'</div><div class="sub">'+slotDayLabel(s)+' '+s.start+'~'+s.end+' · '+fmtMoney(s.price)+'원</div></div></div>';
   }).join("");
   view.innerHTML =
   '<div class="pad">' +
@@ -1959,7 +2083,7 @@ function buildSubmittedTXT(){
   lines.push("--- 선택 내역 ("+picks.length+"건) ---");
   picks.forEach(function(s,i){
     var c = getCourse(s.courseId);
-    lines.push((i+1)+") "+c.name+" | "+DAY_NAMES[s.day]+" | "+s.start+"~"+s.end+" | "+fmtMoney(s.price)+"원 | "+s.id);
+    lines.push((i+1)+") "+c.name+" | "+slotDayLabel(s)+" | "+s.start+"~"+s.end+" | "+fmtMoney(s.price)+"원 | "+s.id);
   });
   var total = picks.reduce(function(a,s){return a+s.price;},0);
   lines.push("[합계] "+picks.length+"건 / "+fmtMoney(total)+"원");
@@ -2009,6 +2133,9 @@ document.addEventListener("click", function(ev){
     case "calPreset": applyCalPreset(pid, el.getAttribute("data-preset")); break;
     case "calDayToggle": toggleCalDay(pid, +el.getAttribute("data-day")); break;
     case "calFilterAll": calFilterAll(pid); break;
+    case "calDateAdd": calDateAdd(pid); break;
+    case "calDateRemove": calDateRemove(pid, el.getAttribute("data-date")); break;
+    case "calDateFillRange": calDateFillRange(pid); break;
     case "calFilterToggle": calFilterToggle(pid, el.getAttribute("data-cid")); break;
     case "toggleSurveyOpen": toggleSurveyOpen(pid); break;
     case "copyUrl": copyUrl(el.getAttribute("data-url")); break;

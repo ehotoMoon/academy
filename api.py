@@ -117,7 +117,7 @@ def _replace_all(programs, courses, slots, responses, instructors=None):
             date_from=p.get("from", ""), date_to=p.get("to", ""), desc=p.get("desc", ""),
             survey_open=bool(p.get("surveyOpen", False)), cal_start=int(p.get("calStart", 9) or 9),
             cal_end=int(p.get("calEnd", 19) or 19), view_days=p.get("viewDays", [0, 1, 2, 3, 4, 5, 6]),
-            view_courses=p.get("viewCourses", "all"),
+            view_courses=p.get("viewCourses", "all"), schedule_type=p.get("scheduleType", "recurring"),
         ))
     for c in courses:
         db.session.add(Course(
@@ -129,6 +129,7 @@ def _replace_all(programs, courses, slots, responses, instructors=None):
             id=s["id"], course_id=s["courseId"], day=int(s.get("day", 0)),
             start=s.get("start", "09:00"), end=s.get("end", "10:00"),
             price=int(s.get("price", 0) or 0), cap=max(1, int(s.get("cap", 20) or 20)),
+            date=s.get("date") or None,
         ))
     for r in responses:
         db.session.add(Response(
