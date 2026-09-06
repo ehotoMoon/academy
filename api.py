@@ -50,7 +50,14 @@ def logout():
 
 @api_bp.route("/session", methods=["GET"])
 def get_session():
-    return jsonify({"admin": bool(session.get(ADMIN_SESSION_KEY))})
+    is_admin = bool(session.get(ADMIN_SESSION_KEY))
+    data = {"admin": is_admin}
+    if is_admin:
+        # Diagnostic: lets an authenticated admin confirm the app is actually
+        # writing to Postgres (persists across redeploys) and not a SQLite
+        # fallback file on Render's ephemeral disk (wiped on every redeploy).
+        data["db_engine"] = db.engine.dialect.name
+    return jsonify(data)
 
 
 # ---------------- admin: whole-DB read/replace ----------------

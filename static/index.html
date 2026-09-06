@@ -143,6 +143,12 @@ label.field:first-child{margin-top:0;}
   display:flex; align-items:center; justify-content:center; color:#374151; font-size:10.5px; font-weight:700;
 }
 .cal-ua-block:hover{ background:repeating-linear-gradient(45deg, rgba(192,57,43,.30), rgba(192,57,43,.30) 6px, rgba(192,57,43,.45) 6px, rgba(192,57,43,.45) 12px); }
+.cal-ua-busy{
+  position:absolute; left:2px; right:2px; border-radius:7px; z-index:24; cursor:default; pointer-events:none;
+  background:repeating-linear-gradient(45deg, rgba(76,111,165,.22), rgba(76,111,165,.22) 6px, rgba(76,111,165,.36) 6px, rgba(76,111,165,.36) 12px);
+  border:1px dashed rgba(76,111,165,.7);
+  display:flex; align-items:center; justify-content:center; color:#2b4a75; font-size:10px; font-weight:700;
+}
 .palette{display:flex; flex-wrap:wrap; gap:8px;}
 .pal-chip{
   padding:8px 12px; border-radius:10px; color:#fff; font-size:12.5px; font-weight:700; cursor:pointer; touch-action:none;
@@ -1053,7 +1059,22 @@ function mountCalendarGrid(pid){
         return '<div class="cal-ua-block" data-ua-iid="'+uaInst.id+'" data-ua-day="'+u.day+'" data-ua-start="'+u.start+'" data-ua-end="'+u.end+'" title="탭하면 해제됩니다" style="top:'+top+'px; height:'+h+'px;">🚫 '+u.start+'~'+u.end+'</div>';
       }).join("");
     }
-    return '<div class="cal-daycol" data-day="'+d+'" style="width:'+dayColWidth+'px; flex-shrink:0; height:'+(rows*ROW_H)+'px;">'+cellsHtml+blocksHtml+uaBlocksHtml+'</div>';
+    // 다른 전체과정에서 이미 이 강사가 수업 중인 시간(이 캘린더엔 원래 안 보이는 슬롯)도 불가능 시간과 함께 표시
+    var otherBusyHtml = '';
+    if(uaInst){
+      otherBusyHtml = DB.slots.filter(function(s){
+        if(s.day!==d) return false;
+        var c = getCourse(s.courseId);
+        return c && c.instructor===uaInst.name && c.programId!==pid;
+      }).map(function(s){
+        var c = getCourse(s.courseId);
+        var top = (toMin(s.start)-calStart)/ROW_MIN*ROW_H;
+        var h = Math.max(ROW_H*0.7,(toMin(s.end)-toMin(s.start))/ROW_MIN*ROW_H);
+        var titleTxt = "다른 전체과정 수업 중 · "+c.name+" "+s.start+"~"+s.end;
+        return '<div class="cal-ua-busy" title="'+esc(titleTxt)+'" style="top:'+top+'px; height:'+h+'px;">🚫 '+s.start+'~'+s.end+' (타과정)</div>';
+      }).join("");
+    }
+    return '<div class="cal-daycol" data-day="'+d+'" style="width:'+dayColWidth+'px; flex-shrink:0; height:'+(rows*ROW_H)+'px;">'+cellsHtml+blocksHtml+uaBlocksHtml+otherBusyHtml+'</div>';
   }).join("");
 
   mount.innerHTML =
