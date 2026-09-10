@@ -280,17 +280,25 @@ var DB = IS_STANDALONE ? window.__STANDALONE_SNAPSHOT__ : emptyDB();
 var dbLoaded = false;
 var publicLoadedPid = null;
 
+var pendingSaves = 0;
+window.addEventListener("beforeunload", function(e){
+  if(pendingSaves > 0){ e.preventDefault(); e.returnValue = ""; return ""; }
+});
 function persist(){
   if(IS_STANDALONE) return; // 배포본은 저장하지 않음(메모리 전용)
+  pendingSaves++;
   fetch("/api/db", {
     method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(DB)
   }).then(function(r){
+    pendingSaves--;
     if(r.status===401){
       setAdmin(false); dbLoaded=false; DB=emptyDB();
       toast("로그인이 만료되었습니다. 다시 로그인해 주세요");
       go("/admin");
+    } else if(!r.ok){
+      toast("저장 실패 - 변경사항이 서버에 반영되지 않았습니다");
     }
-  }).catch(function(){ toast("저장 실패 - 네트워크를 확인해 주세요"); });
+  }).catch(function(){ pendingSaves--; toast("저장 실패 - 네트워크를 확인해 주세요"); });
 }
 
 function getProgram(pid){ return DB.programs.find(function(p){return p.id===pid;}); }
